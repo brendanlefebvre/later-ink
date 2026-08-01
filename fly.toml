@@ -1,11 +1,15 @@
 # Fly.io config — deploy with `fly launch` / `fly deploy`.
 # Set secrets first:
-#   fly secrets set STRIPE_SECRET_KEY=sk_live_... STRIPE_PAYMENT_LINK=https://buy.stripe.com/... BASE_URL=https://yourdomain.tld
+#   fly secrets set STRIPE_SECRET_KEY=sk_live_... STRIPE_PAYMENT_LINK=https://buy.stripe.com/... BASE_URL=https://later.ink
+#   fly secrets set ENCRYPTION_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+# Losing ENCRYPTION_KEY means every stored token is unreadable and all users
+# must re-onboard — keep it safe.
 app = "read-later-opds"
 primary_region = "ewr"
 
 [env]
   DATABASE_PATH = "/data/app.db"
+  TRUST_PROXY_HEADERS = "1"
 
 [[mounts]]
   source = "data"

@@ -3,6 +3,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 
+class UpstreamError(Exception):
+    """The upstream read-it-later service failed; surface a readable message."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
 @dataclass
 class Folder:
     id: str
@@ -19,6 +27,7 @@ class Article:
     url: str | None = None
     updated: datetime = field(default_factory=datetime.now)
     word_count: int | None = None
+    language: str | None = None
 
 
 class Connector(ABC):
