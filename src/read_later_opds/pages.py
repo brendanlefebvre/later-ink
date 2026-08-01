@@ -73,8 +73,8 @@ working on any OPDS device.</p>
 <li>Add that URL to KOReader's OPDS browser and read your queue on e-ink</li>
 </ol>
 <h2>FAQ</h2>
-<p><strong>What shows up in the catalog?</strong> Items Reader classifies as
-articles. PDFs, videos, and tweets are filtered out for now.</p>
+<p><strong>What shows up in the catalog?</strong> Articles and books from your
+Reader account. Tweets, videos, and PDFs are skipped for now.</p>
 <p><strong>Why OPDS?</strong> KOReader (and Calibre, Moon+ Reader, and other
 e-reader apps) already speak it &mdash; no plugin, no app, nothing to install
 beyond typing a URL.</p>
@@ -125,8 +125,8 @@ keyboard &mdash; all lowercase, no symbols except hyphens and slashes):</p>
 <li>Tap <strong>+</strong> and add the URL above (no username/password needed)</li>
 <li>Browse your queue and tap any article to download it as EPUB</li>
 </ol>
-<p class="muted">Note: the catalog shows items Reader classifies as articles;
-PDFs, videos, and tweets are filtered out for now.</p>
+<p class="muted">Note: the catalog shows articles and books; tweets, videos,
+and PDFs are skipped for now.</p>
 <p><strong>Keep this URL private</strong> &mdash; anyone who has it can read
 your saved articles. Lost or leaked it? <strong>Save this page</strong> &mdash;
 the buttons below only work from here.</p>
