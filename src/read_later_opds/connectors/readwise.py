@@ -32,6 +32,10 @@ LOCATIONS = [
     Folder("feed", "Feed", "Feed articles"),
 ]
 
+# Readwise categories we attempt to serve as EPUBs. Tweets/youtube/podcasts are
+# excluded by default (little or no article text to convert); PDFs too for now.
+EPUB_CATEGORIES = ("article", "book")
+
 
 def _article_from_doc(doc: dict) -> Article:
     return Article(
@@ -49,8 +53,9 @@ class ReadwiseConnector(Connector):
     name = "readwise"
     description = "Readwise Reader"
 
-    def __init__(self, token: str):
+    def __init__(self, token: str, categories: tuple[str, ...] = EPUB_CATEGORIES):
         self._token = token
+        self._categories = set(categories)
         self._client = httpx.AsyncClient(
             base_url=BASE_URL,
             headers={"Authorization": f"Token {token}"},
@@ -88,15 +93,19 @@ class ReadwiseConnector(Connector):
     async def list_articles(
         self, folder_id: str, cursor: str | None = None
     ) -> tuple[list[Article], str | None]:
-        params: dict[str, str] = {
-            "location": folder_id,
-            "category": "article",
-        }
+        # The list endpoint filters by a single category, so to surface more
+        # than one type (articles + books by default) we fetch the whole
+        # location and filter client-side to the configured categories.
+        params: dict[str, str] = {"location": folder_id}
         if cursor:
             params["pageCursor"] = cursor
 
         data = await self._get("/list/", params)
-        articles = [_article_from_doc(doc) for doc in data.get("results", [])]
+        articles = [
+            _article_from_doc(doc)
+            for doc in data.get("results", [])
+            if doc.get("category") in self._categories
+        ]
         return articles, data.get("nextPageCursor")
 
     async def get_article_html(self, article_id: str) -> tuple[Article, str]:

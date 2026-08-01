@@ -40,8 +40,8 @@ the URL. Browse folders (Later, New, Shortlist, Archive, Feed), tap an article
 to download and read. Images are embedded in the EPUB, so articles read fully
 offline.
 
-**Current limitation:** only items Reader classifies as *articles* appear;
-PDFs, videos, and tweets are filtered out for now.
+**What appears:** articles and books; tweets, videos, and PDFs are skipped for
+now. Configurable via `READWISE_CATEGORIES` (e.g. `article,book,pdf`).
 
 ## Hosted version
 

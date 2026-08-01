@@ -36,3 +36,12 @@ def get_encryption_key() -> str | None:
 def trust_proxy_headers() -> bool:
     """Only honor fly-client-ip / x-forwarded-for behind a known proxy."""
     return os.environ.get("TRUST_PROXY_HEADERS", "").lower() in ("1", "true", "yes")
+
+
+def get_readwise_categories() -> tuple[str, ...]:
+    """Readwise categories to surface, e.g. READWISE_CATEGORIES=article,book,pdf.
+    Defaults to articles + books."""
+    raw = os.environ.get("READWISE_CATEGORIES")
+    if not raw:
+        return ("article", "book")
+    return tuple(c.strip() for c in raw.split(",") if c.strip())

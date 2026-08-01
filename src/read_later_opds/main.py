@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
     app.state.limiter = MissLimiter(app.state.store, limit=20, window=3600.0)
     token = config.get_readwise_token()
     if token:
-        _connectors["readwise"] = ReadwiseConnector(token)
+        _connectors["readwise"] = ReadwiseConnector(token, config.get_readwise_categories())
     yield
     for c in _connectors.values():
         if hasattr(c, "close"):
