@@ -1,5 +1,5 @@
-import io
 import hashlib
+import io
 import logging
 from html import escape
 
