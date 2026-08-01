@@ -32,9 +32,12 @@ LOCATIONS = [
     Folder("feed", "Feed", "Feed articles"),
 ]
 
-# Readwise categories we attempt to serve as EPUBs. Tweets/youtube/podcasts are
-# excluded by default (little or no article text to convert); PDFs too for now.
-EPUB_CATEGORIES = ("article", "book")
+# Readwise categories we serve, all delivered as EPUBs converted from the
+# document's html_content (which Readwise populates for every one of these,
+# including uploaded PDFs and EPUBs). Tweets/videos/podcasts are excluded by
+# default — little or no article text to convert. Note: Reader's category for
+# uploaded books is "epub", not "book".
+DEFAULT_CATEGORIES = ("article", "email", "pdf", "epub")
 
 
 def _article_from_doc(doc: dict) -> Article:
@@ -53,7 +56,7 @@ class ReadwiseConnector(Connector):
     name = "readwise"
     description = "Readwise Reader"
 
-    def __init__(self, token: str, categories: tuple[str, ...] = EPUB_CATEGORIES):
+    def __init__(self, token: str, categories: tuple[str, ...] = DEFAULT_CATEGORIES):
         self._token = token
         self._categories = set(categories)
         self._client = httpx.AsyncClient(

@@ -43,7 +43,7 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
     else:
         hosted = (
             '<p class="muted">There is no hosted instance running yet &mdash; '
-            "for now, self-host it (a few minutes with Docker). A free hosted "
+            "for now, self-host it (a few minutes with Docker). A hosted "
             "instance may come later.</p>"
         )
     return _page(
@@ -57,11 +57,6 @@ devices, and download them as clean EPUBs, images embedded, so they read fully
 offline. No app to install; just add one catalog URL.</p>
 <p>It's <strong>free and open source</strong> (MIT), and designed to be
 self-hosted with your own Readwise token.</p>
-<p class="muted">later.ink is a <strong>reading path, not a sync path</strong>:
-it never writes back to Readwise, so articles stay in your queue as you read.
-If you want finished articles to archive and leave the device automatically,
-a KOReader plugin does that &mdash; this trades that for zero install and
-working on any OPDS device.</p>
 {hosted}
 <h2>Self-host it</h2>
 <ol>
@@ -73,8 +68,9 @@ working on any OPDS device.</p>
 <li>Add that URL to KOReader's OPDS browser and read your queue on e-ink</li>
 </ol>
 <h2>FAQ</h2>
-<p><strong>What shows up in the catalog?</strong> Articles and books from your
-Reader account. Tweets, videos, and PDFs are skipped for now.</p>
+<p><strong>What shows up in the catalog?</strong> Articles, emails, PDFs, and
+books (uploaded EPUBs) from your Reader account &mdash; each delivered as an
+EPUB your reader can open. Tweets, videos, and podcasts are skipped.</p>
 <p><strong>Why OPDS?</strong> KOReader (and Calibre, Moon+ Reader, and other
 e-reader apps) already speak it &mdash; no plugin, no app, nothing to install
 beyond typing a URL.</p>
@@ -125,8 +121,8 @@ keyboard &mdash; all lowercase, no symbols except hyphens and slashes):</p>
 <li>Tap <strong>+</strong> and add the URL above (no username/password needed)</li>
 <li>Browse your queue and tap any article to download it as EPUB</li>
 </ol>
-<p class="muted">Note: the catalog shows articles and books; tweets, videos,
-and PDFs are skipped for now.</p>
+<p class="muted">Note: the catalog shows articles, emails, PDFs, and books;
+tweets, videos, and podcasts are skipped.</p>
 <p><strong>Keep this URL private</strong> &mdash; anyone who has it can read
 your saved articles. Lost or leaked it? <strong>Save this page</strong> &mdash;
 the buttons below only work from here.</p>
