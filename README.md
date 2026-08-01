@@ -10,6 +10,10 @@ article HTML that Reader has already cleaned up.
 
 No plugin, no app, no sync daemon — OPDS is built into KOReader.
 
+**Free and open source (MIT), and built to self-host** with your own Readwise
+token. Run it on a NAS, a Raspberry Pi, a VPS, or your laptop — it holds nothing
+but your own reading queue.
+
 ## Self-host quickstart
 
 ```bash
@@ -30,13 +34,13 @@ offline.
 **Current limitation:** only items Reader classifies as *articles* appear;
 PDFs, videos, and tweets are filtered out for now.
 
-## Hosted version — [later.ink](https://later.ink)
+## Hosted version
 
-Don't want to run a server? Use the hosted version at
-**[later.ink](https://later.ink)** — pay what you want ($1 minimum, one-time,
-early access). You paste your Readwise token and get a short personal catalog
-URL like `later.ink/maple-crater-nine/`, designed to be easy to type on an
-e-ink keyboard.
+There's no public hosted instance running yet — self-hosting is the supported
+path today. The server does include an optional multi-tenant mode (short,
+e-ink-typeable catalog URLs like `later.ink/maple-crater-nine/`, with per-user
+tokens encrypted at rest), so a free hosted instance may come later. If you want
+to stand one up yourself, see the multi-tenant env vars in `.env.example`.
 
 ## Architecture
 
@@ -48,7 +52,7 @@ src/read_later_opds/
   store.py         # SQLite user store + word-based secret URLs
   ratelimit.py     # per-IP throttle for unknown-secret probes
   pages.py         # server-rendered HTML pages
-  payments.py      # Stripe Checkout Session verification
+  payments.py      # Stripe verification (optional; inactive unless configured)
   connectors/
     base.py        # Connector interface: folders / articles / article HTML
     readwise.py    # Readwise Reader API v3 connector
