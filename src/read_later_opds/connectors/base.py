@@ -40,6 +40,7 @@ class Article:
     word_count: int | None = None
     language: str | None = None
     category: str | None = None
+    image_url: str | None = None
 
 
 class Connector(ABC):

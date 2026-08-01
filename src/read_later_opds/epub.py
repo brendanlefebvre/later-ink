@@ -8,6 +8,8 @@ import httpx
 from ebooklib import epub
 from lxml.html import fromstring, tostring
 
+from . import covers
+
 logger = logging.getLogger(__name__)
 
 # One image-heavy download must not blow up over a Kobo's wifi.
@@ -115,11 +117,14 @@ def _serialize(el) -> str:
     return re.sub(r'\s+epub:type="[^"]*"', "", xml)
 
 
-async def _embed_images_maybe(doc, client: httpx.AsyncClient | None) -> list[epub.EpubItem]:
-    if client is not None:
-        return await _embed_images(doc, client)
-    async with httpx.AsyncClient() as owned:
-        return await _embed_images(doc, owned)
+async def _fetch_bytes(client: httpx.AsyncClient, url: str) -> bytes | None:
+    try:
+        resp = await client.get(url, timeout=IMAGE_FETCH_TIMEOUT, follow_redirects=True)
+        resp.raise_for_status()
+        return resp.content
+    except Exception:
+        logger.debug("cover image fetch failed: %s", url)
+        return None
 
 
 async def build_epub(
@@ -130,6 +135,8 @@ async def build_epub(
     identifier: str | None = None,
     language: str = "en",
     preserve_styles: bool = False,
+    image_url: str | None = None,
+    raw_cover: bool = False,
     image_client: httpx.AsyncClient | None = None,
 ) -> bytes:
     """Convert Readwise html_content into an EPUB.
@@ -137,7 +144,9 @@ async def build_epub(
     Splits into per-section chapters (with a nav TOC) when the source carries
     structure, else emits a single chapter. When preserve_styles is set (epub
     uploads), the source's own stylesheet is kept and scoped; otherwise content
-    is normalized to a clean readable stylesheet.
+    is normalized. A cover is always set: the hero image raw when raw_cover is
+    set (epub uploads keep their designed cover), otherwise a generated cover
+    (faded hero + title/author, or a clean text cover when there's no image).
     """
     book = epub.EpubBook()
 
@@ -156,28 +165,43 @@ async def build_epub(
     original_css = ""
     use_orig = False
 
+    owns_client = image_client is None
+    client = image_client or httpx.AsyncClient()
     try:
-        doc = fromstring(html_content)
-        if preserve_styles:
-            original_css = "\n".join(s.text_content() for s in doc.xpath("//style"))
-        for el in doc.xpath("//script | //style"):
-            parent = el.getparent()
-            if parent is not None:
-                parent.remove(el)
+        cover_src = await _fetch_bytes(client, image_url) if image_url else None
+        try:
+            doc = fromstring(html_content)
+            if preserve_styles:
+                original_css = "\n".join(s.text_content() for s in doc.xpath("//style"))
+            for el in doc.xpath("//script | //style"):
+                parent = el.getparent()
+                if parent is not None:
+                    parent.remove(el)
 
-        image_items = await _embed_images_maybe(doc, image_client)
+            image_items = await _embed_images(doc, client)
 
-        units = _split_units(doc)
-        if units is None:
-            chapters_src = [(title, _serialize(doc))]
-        else:
-            chapters_src = [(_unit_title(el, i), _serialize(el)) for i, el in enumerate(units)]
+            units = _split_units(doc)
+            if units is None:
+                chapters_src = [(title, _serialize(doc))]
+            else:
+                chapters_src = [(_unit_title(el, i), _serialize(el)) for i, el in enumerate(units)]
 
-        use_orig = preserve_styles and bool(original_css.strip())
-    except Exception:
-        logger.warning("HTML parse failed for %r; emitting fallback page", title)
-        chapters_src = [(title, _fallback_html(title, source_url))]
-        use_orig = False
+            use_orig = preserve_styles and bool(original_css.strip())
+        except Exception:
+            logger.warning("HTML parse failed for %r; emitting fallback page", title)
+            chapters_src = [(title, _fallback_html(title, source_url))]
+            use_orig = False
+    finally:
+        if owns_client:
+            await client.aclose()
+
+    if raw_cover and cover_src:
+        cover_bytes = cover_src
+    elif raw_cover:
+        cover_bytes = covers.make_cover(None, title, author)
+    else:
+        cover_bytes = covers.make_cover(cover_src, title, author)
+    book.set_cover("cover.jpg", cover_bytes, create_page=False)
 
     # A single stylesheet linked from every chapter: the source's own (scoped)
     # for epub uploads, otherwise our normalized one.
