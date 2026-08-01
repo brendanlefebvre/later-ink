@@ -99,6 +99,42 @@ def test_images_embedded_and_rewritten():
         assert "images/img0.png" in xhtml
 
 
+def _cover_files(zf):
+    return [n for n in zf.namelist() if "cover" in n.lower() and n.lower().endswith((".jpg", ".jpeg", ".png"))]
+
+
+def test_generated_cover_present_without_image():
+    data = asyncio.run(build_epub(title="No Image", author="A", html_content="<p>x</p>", identifier="cov1"))
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        covers = _cover_files(zf)
+        assert covers, zf.namelist()
+        assert zf.read(covers[0])[:2] == b"\xff\xd8"  # generated JPEG
+
+
+def test_raw_cover_passes_original_image_through():
+    async def run():
+        async with _mock_client() as client:
+            return await build_epub(
+                title="Book",
+                author="A",
+                html_content=(
+                    "<section data-rw-epub-toc='1'><h2>I</h2><p>x</p></section>"
+                    "<section data-rw-epub-toc='2'><h2>II</h2><p>y</p></section>"
+                ),
+                identifier="raw1",
+                preserve_styles=True,
+                image_url="https://example.com/cover.png",
+                raw_cover=True,
+                image_client=client,
+            )
+
+    data = asyncio.run(run())
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        covers = _cover_files(zf)
+        assert covers
+        assert zf.read(covers[0]) == PNG_BYTES  # original bytes, not regenerated
+
+
 def test_image_fetch_failure_keeps_remote_ref():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)

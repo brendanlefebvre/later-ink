@@ -83,6 +83,12 @@ ALLOW_FREE_SIGNUP=1 uvicorn read_later_opds.main:app --reload
 pytest
 ```
 
+## Credits
+
+Generated EPUB covers use [League Spartan](https://github.com/theleagueof/league-spartan)
+by The League of Moveable Type, bundled under the SIL Open Font License
+(`src/read_later_opds/assets/fonts/OFL.txt`).
+
 ## License
 
 MIT
