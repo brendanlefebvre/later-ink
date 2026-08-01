@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -14,7 +14,7 @@ async def validate_token(token: str) -> bool:
     `updatedAfter=now` yields an empty page — auth is checked without pulling
     the user's whole document list or denting their rate limit mid-onboarding.
     """
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(
             f"{BASE_URL}/list/",

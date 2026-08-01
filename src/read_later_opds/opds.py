@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from lxml import etree
 
@@ -16,7 +16,7 @@ EPUB_TYPE = "application/epub+zip"
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _add_text(parent: etree._Element, tag: str, text: str) -> etree._Element:
