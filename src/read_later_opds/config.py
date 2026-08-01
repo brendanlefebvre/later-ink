@@ -24,3 +24,15 @@ def get_base_url() -> str:
 
 def allow_free_signup() -> bool:
     return os.environ.get("ALLOW_FREE_SIGNUP", "").lower() in ("1", "true", "yes")
+
+
+def get_encryption_key() -> str | None:
+    """Fernet key for token encryption at rest. Generate with:
+    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    """
+    return os.environ.get("ENCRYPTION_KEY")
+
+
+def trust_proxy_headers() -> bool:
+    """Only honor fly-client-ip / x-forwarded-for behind a known proxy."""
+    return os.environ.get("TRUST_PROXY_HEADERS", "").lower() in ("1", "true", "yes")

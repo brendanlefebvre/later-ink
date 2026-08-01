@@ -56,9 +56,17 @@ install &mdash; just add one catalog URL.</p>
 <li>Read your queue, offline, on e-ink</li>
 </ol>
 <h2>FAQ</h2>
-<p><strong>Is my token safe?</strong> Your token is stored server-side, sent only
-to Readwise over HTTPS, never logged, and used solely to fetch your articles.
-You can delete it (and everything else we hold) with one click.</p>
+<p><strong>Is my token safe?</strong> Your token is encrypted at rest with a key
+held outside the database, sent only to Readwise over HTTPS, and used solely to
+fetch your articles. Your catalog URL works like a password &mdash; keep it
+private; you can regenerate it, or delete your token and everything else we
+hold, with one click.</p>
+<p><strong>What does "early access" mean?</strong> A one-time payment gets you
+in now, while the service is young. It isn't a promise of service forever;
+if later.ink grows, it will likely move to a small annual price, and early
+supporters will be treated generously.</p>
+<p><strong>What shows up in the catalog?</strong> Items Reader classifies as
+articles. PDFs, videos, and tweets are filtered out for now.</p>
 <p><strong>Can I self-host instead?</strong> Yes &mdash; the entire server is
 open source (MIT). Run it yourself with docker-compose and skip the hosted
 version entirely.</p>
@@ -91,7 +99,7 @@ sent to Readwise.</p>
     )
 
 
-def success(catalog_url: str, secret: str) -> str:
+def success(catalog_url: str, secret: str, csrf: str) -> str:
     return _page(
         "Your catalog is ready",
         f"""
@@ -106,13 +114,18 @@ keyboard &mdash; all lowercase, no symbols except hyphens and slashes):</p>
 <li>Tap <strong>+</strong> and add the URL above (no username/password needed)</li>
 <li>Browse your queue and tap any article to download it as EPUB</li>
 </ol>
+<p class="muted">Note: the catalog shows items Reader classifies as articles;
+PDFs, videos, and tweets are filtered out for now.</p>
 <p><strong>Keep this URL private</strong> &mdash; anyone who has it can read
-your saved articles. Lost or leaked it?</p>
+your saved articles. Lost or leaked it? <strong>Save this page</strong> &mdash;
+the buttons below only work from here.</p>
 <form method="post" action="/{escape(secret)}/regenerate" style="display:inline">
+<input type="hidden" name="csrf" value="{escape(csrf)}">
 <button class="btn" type="submit">Get a new URL</button>
 </form>
 <form method="post" action="/{escape(secret)}/delete" style="display:inline; margin-left:0.5em"
       onsubmit="return confirm('Delete your catalog and stored token?')">
+<input type="hidden" name="csrf" value="{escape(csrf)}">
 <button class="btn" type="submit" style="background:#b00020">Delete everything</button>
 </form>
 """,

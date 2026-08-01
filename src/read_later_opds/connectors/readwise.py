@@ -1,14 +1,24 @@
+import asyncio
+from datetime import datetime, timezone
+
 import httpx
 
-from .base import Article, Connector, Folder
+from .base import Article, Connector, Folder, UpstreamError
 
 BASE_URL = "https://readwise.io/api/v3"
 
+
 async def validate_token(token: str) -> bool:
-    """True if the token is accepted by the Readwise API."""
+    """True if the token is accepted by the Readwise API.
+
+    `updatedAfter=now` yields an empty page — auth is checked without pulling
+    the user's whole document list or denting their rate limit mid-onboarding.
+    """
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(
             f"{BASE_URL}/list/",
+            params={"updatedAfter": now_iso},
             headers={"Authorization": f"Token {token}"},
         )
     return resp.status_code == 200
@@ -23,6 +33,18 @@ LOCATIONS = [
 ]
 
 
+def _article_from_doc(doc: dict) -> Article:
+    return Article(
+        id=str(doc["id"]),
+        title=doc.get("title") or "Untitled",
+        author=doc.get("author"),
+        summary=doc.get("summary"),
+        url=doc.get("source_url") or doc.get("url"),
+        word_count=doc.get("word_count"),
+        language=doc.get("language"),
+    )
+
+
 class ReadwiseConnector(Connector):
     name = "readwise"
     description = "Readwise Reader"
@@ -34,6 +56,31 @@ class ReadwiseConnector(Connector):
             headers={"Authorization": f"Token {token}"},
             timeout=30.0,
         )
+
+    async def _get(self, path: str, params: dict[str, str]) -> dict:
+        """GET with one retry on 429 (honoring Retry-After) and readable errors."""
+        for attempt in (0, 1):
+            try:
+                resp = await self._client.get(path, params=params)
+            except httpx.HTTPError as e:
+                raise UpstreamError(f"Could not reach Readwise: {type(e).__name__}") from e
+            if resp.status_code == 429 and attempt == 0:
+                try:
+                    delay = min(float(resp.headers.get("Retry-After", "2")), 15.0)
+                except ValueError:
+                    delay = 2.0
+                await asyncio.sleep(delay)
+                continue
+            break
+        if resp.status_code == 429:
+            raise UpstreamError(
+                "Readwise is rate-limiting this account — try again in a minute", 429
+            )
+        if resp.status_code == 401:
+            raise UpstreamError("Readwise rejected the stored token", 401)
+        if resp.status_code >= 400:
+            raise UpstreamError(f"Readwise returned an error ({resp.status_code})", resp.status_code)
+        return resp.json()
 
     async def list_folders(self) -> list[Folder]:
         return LOCATIONS
@@ -48,48 +95,21 @@ class ReadwiseConnector(Connector):
         if cursor:
             params["pageCursor"] = cursor
 
-        resp = await self._client.get("/list/", params=params)
-        resp.raise_for_status()
-        data = resp.json()
-
-        articles = []
-        for doc in data.get("results", []):
-            articles.append(
-                Article(
-                    id=str(doc["id"]),
-                    title=doc.get("title") or "Untitled",
-                    author=doc.get("author"),
-                    summary=doc.get("summary"),
-                    url=doc.get("source_url") or doc.get("url"),
-                    word_count=doc.get("word_count"),
-                )
-            )
-
-        next_cursor = data.get("nextPageCursor")
-        return articles, next_cursor
+        data = await self._get("/list/", params)
+        articles = [_article_from_doc(doc) for doc in data.get("results", [])]
+        return articles, data.get("nextPageCursor")
 
     async def get_article_html(self, article_id: str) -> tuple[Article, str]:
-        resp = await self._client.get(
-            "/list/",
-            params={"id": article_id, "withHtmlContent": "true"},
+        data = await self._get(
+            "/list/", {"id": article_id, "withHtmlContent": "true"}
         )
-        resp.raise_for_status()
-        data = resp.json()
 
         results = data.get("results", [])
         if not results:
             raise ValueError(f"Article {article_id} not found")
 
         doc = results[0]
-        article = Article(
-            id=str(doc["id"]),
-            title=doc.get("title") or "Untitled",
-            author=doc.get("author"),
-            summary=doc.get("summary"),
-            url=doc.get("source_url") or doc.get("url"),
-            word_count=doc.get("word_count"),
-        )
-
+        article = _article_from_doc(doc)
         html_content = doc.get("html_content", "")
         if not html_content:
             raise ValueError(f"No HTML content for article {article_id}")

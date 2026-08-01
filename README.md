@@ -23,8 +23,12 @@ docker-compose up -d
 Your catalog is now at `http://your-host:8000/opds/`.
 
 **KOReader setup:** top menu → magnifying glass → *OPDS catalog* → `+` → enter
-the URL. Browse folders (Later, New, Shortlist, Archive), tap an article to
-download and read.
+the URL. Browse folders (Later, New, Shortlist, Archive, Feed), tap an article
+to download and read. Images are embedded in the EPUB, so articles read fully
+offline.
+
+**Current limitation:** only items Reader classifies as *articles* appear;
+PDFs, videos, and tweets are filtered out for now.
 
 ## Hosted version — [later.ink](https://later.ink)
 

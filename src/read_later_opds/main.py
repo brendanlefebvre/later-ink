@@ -1,18 +1,23 @@
 import hashlib
+import hmac
+import logging
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 
+from cryptography.fernet import Fernet
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 
 from . import config, opds, pages
 from .connectors import readwise
-from .connectors.base import Connector
+from .connectors.base import Connector, UpstreamError
 from .connectors.readwise import ReadwiseConnector
 from .epub import build_epub
 from .payments import verify_checkout_session
 from .ratelimit import MissLimiter
 from .store import RESERVED_PATHS, Store
+
+logger = logging.getLogger(__name__)
 
 NAV_MEDIA = "application/atom+xml;profile=opds-catalog;kind=navigation"
 ACQ_MEDIA = "application/atom+xml;profile=opds-catalog;kind=acquisition"
@@ -27,8 +32,16 @@ _tenant_connectors: OrderedDict[str, ReadwiseConnector] = OrderedDict()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.store = Store(config.get_database_path())
-    app.state.limiter = MissLimiter(limit=20, window=3600.0)
+    key = config.get_encryption_key()
+    if key is None:
+        key = Fernet.generate_key().decode()
+        logger.warning(
+            "ENCRYPTION_KEY is not set — using an ephemeral key. Stored tokens "
+            "will be unreadable after restart. Set ENCRYPTION_KEY in production."
+        )
+    app.state.csrf_key = key.encode()
+    app.state.store = Store(config.get_database_path(), Fernet(key.encode()))
+    app.state.limiter = MissLimiter(app.state.store, limit=20, window=3600.0)
     token = config.get_readwise_token()
     if token:
         _connectors["readwise"] = ReadwiseConnector(token)
@@ -64,10 +77,23 @@ async def _tenant_connector(token: str) -> ReadwiseConnector:
 
 
 def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("fly-client-ip") or request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
+    # Forwarding headers are client-controlled unless a trusted proxy sets
+    # them; honoring them blindly hands out a fresh rate-limit bucket per
+    # request. TRUST_PROXY_HEADERS is set on Fly, off by default elsewhere.
+    if config.trust_proxy_headers():
+        fwd = request.headers.get("fly-client-ip") or request.headers.get("x-forwarded-for")
+        if fwd:
+            return fwd.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _csrf_token(secret: str) -> str:
+    return hmac.new(app.state.csrf_key, f"csrf:{secret}".encode(), "sha256").hexdigest()[:32]
+
+
+def _require_csrf(secret: str, token: str | None) -> None:
+    if not token or not hmac.compare_digest(_csrf_token(secret), token):
+        raise HTTPException(403, "Invalid or missing CSRF token")
 
 
 def _resolve_secret(secret: str, request: Request) -> str:
@@ -88,6 +114,12 @@ def _resolve_secret(secret: str, request: Request) -> str:
 def _feed_id(secret: str) -> str:
     # Stable per-user feed id that doesn't echo the secret itself
     return "urn:read-later-opds:u:" + hashlib.sha1(secret.encode()).hexdigest()[:12]
+
+
+@app.exception_handler(UpstreamError)
+async def upstream_error_handler(request: Request, exc: UpstreamError):
+    # KOReader shows response text on failed downloads — keep it readable.
+    return Response(content=str(exc), status_code=502, media_type="text/plain")
 
 
 # ---------------------------------------------------------------- pages
@@ -149,7 +181,7 @@ async def start_post(
 
     secret = app.state.store.create_user(readwise_token, stripe_ref=session_id)
     catalog_url = f"{config.get_base_url()}/{secret}/"
-    return pages.success(catalog_url, secret)
+    return pages.success(catalog_url, secret, _csrf_token(secret))
 
 
 # ------------------------------------------- single-user self-host mode
@@ -207,18 +239,20 @@ async def opds_folder(connector: str, folder_id: str, cursor: str | None = Query
 
 
 @app.post("/{secret}/regenerate", response_class=HTMLResponse)
-async def tenant_regenerate(secret: str, request: Request):
+async def tenant_regenerate(secret: str, request: Request, csrf: str | None = Form(None)):
     _resolve_secret(secret, request)
+    _require_csrf(secret, csrf)
     new_secret = app.state.store.regenerate_secret(secret)
     if new_secret is None:
         raise HTTPException(404)
     catalog_url = f"{config.get_base_url()}/{new_secret}/"
-    return pages.success(catalog_url, new_secret)
+    return pages.success(catalog_url, new_secret, _csrf_token(new_secret))
 
 
 @app.post("/{secret}/delete", response_class=HTMLResponse)
-async def tenant_delete(secret: str, request: Request):
+async def tenant_delete(secret: str, request: Request, csrf: str | None = Form(None)):
     token = _resolve_secret(secret, request)
+    _require_csrf(secret, csrf)
     app.state.store.delete_user(secret)
     conn = _tenant_connectors.pop(token, None)
     if conn is not None:
@@ -304,11 +338,13 @@ async def _folder_response(
 
 async def _epub_response(c: Connector, article_id: str) -> Response:
     article, html_content = await c.get_article_html(article_id)
-    epub_bytes = build_epub(
+    epub_bytes = await build_epub(
         title=article.title,
         author=article.author,
         html_content=html_content,
         source_url=article.url,
+        identifier=article.id,
+        language=article.language or "en",
     )
     safe_title = "".join(ch if ch.isalnum() or ch in " -_" else "_" for ch in article.title)
     return Response(
