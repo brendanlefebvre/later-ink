@@ -33,11 +33,13 @@ LOCATIONS = [
 ]
 
 # Readwise categories we serve, all delivered as EPUBs converted from the
-# document's html_content (which Readwise populates for every one of these,
-# including uploaded PDFs and EPUBs). Tweets/videos/podcasts are excluded by
-# default — little or no article text to convert. Note: Reader's category for
-# uploaded books is "epub", not "book".
-DEFAULT_CATEGORIES = ("article", "email", "pdf", "epub")
+# document's html_content — which Readwise populates for every one of these:
+# PDFs and uploaded EPUBs as document text, videos as transcripts, tweets as
+# unrolled threads. Podcasts are excluded: their transcript is lazy-loaded in
+# Reader and never appears in the API response (just a "Load Transcript" stub).
+# Note: Reader's category for uploaded books is "epub" (not "book"), and for
+# videos is "video" (not "youtube").
+DEFAULT_CATEGORIES = ("article", "email", "pdf", "epub", "video", "tweet")
 
 
 def _article_from_doc(doc: dict) -> Article:

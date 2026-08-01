@@ -43,5 +43,5 @@ def get_readwise_categories() -> tuple[str, ...]:
     Defaults to articles + books."""
     raw = os.environ.get("READWISE_CATEGORIES")
     if not raw:
-        return ("article", "email", "pdf", "epub")
+        return ("article", "email", "pdf", "epub", "video", "tweet")
     return tuple(c.strip() for c in raw.split(",") if c.strip())
