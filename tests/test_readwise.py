@@ -5,10 +5,11 @@ from read_later_opds.connectors.readwise import ReadwiseConnector
 MIXED = {
     "results": [
         {"id": "1", "title": "An article", "category": "article"},
-        {"id": "2", "title": "A book", "category": "book"},
-        {"id": "3", "title": "A tweet", "category": "tweet"},
-        {"id": "4", "title": "A video", "category": "youtube"},
-        {"id": "5", "title": "A pdf", "category": "pdf"},
+        {"id": "2", "title": "An email", "category": "email"},
+        {"id": "3", "title": "A pdf", "category": "pdf"},
+        {"id": "4", "title": "A book", "category": "epub"},
+        {"id": "5", "title": "A tweet", "category": "tweet"},
+        {"id": "6", "title": "A video", "category": "youtube"},
     ],
     "nextPageCursor": "next123",
 }
@@ -28,12 +29,13 @@ def _list(conn: ReadwiseConnector):
     return asyncio.run(run())
 
 
-def test_default_categories_are_articles_and_books():
+def test_default_categories_cover_articles_emails_pdfs_epubs():
     articles, cursor = _list(ReadwiseConnector("tok"))
-    assert {a.id for a in articles} == {"1", "2"}  # article + book, not tweet/video/pdf
+    # article + email + pdf + epub, not tweet/video
+    assert {a.id for a in articles} == {"1", "2", "3", "4"}
     assert cursor == "next123"  # pagination cursor passed through
 
 
 def test_categories_configurable():
     articles, _ = _list(ReadwiseConnector("tok", categories=("article", "pdf")))
-    assert {a.id for a in articles} == {"1", "5"}
+    assert {a.id for a in articles} == {"1", "3"}

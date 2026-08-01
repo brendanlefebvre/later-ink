@@ -40,8 +40,11 @@ the URL. Browse folders (Later, New, Shortlist, Archive, Feed), tap an article
 to download and read. Images are embedded in the EPUB, so articles read fully
 offline.
 
-**What appears:** articles and books; tweets, videos, and PDFs are skipped for
-now. Configurable via `READWISE_CATEGORIES` (e.g. `article,book,pdf`).
+**What appears:** articles, emails, PDFs, and books (uploaded EPUBs) — each
+delivered as an EPUB, converted from the content Readwise exposes. Tweets,
+videos, and podcasts are skipped. Configurable via `READWISE_CATEGORIES`
+(e.g. `article,pdf`). Note: long books currently convert to a single
+chapter — TOC/chapter-splitting is planned.
 
 ## Hosted version
 
