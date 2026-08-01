@@ -41,11 +41,12 @@ to download and read. Images are embedded in the EPUB, so articles read fully
 offline.
 
 **What appears:** articles, emails, PDFs, books (uploaded EPUBs), video
-transcripts, and tweet threads — each delivered as an EPUB, converted from the
-content Readwise exposes. Podcasts are skipped (their transcript is lazy-loaded
-in Reader and never reaches the API). Configurable via `READWISE_CATEGORIES`
-(e.g. `article,pdf`). Note: long books currently convert to a single
-chapter — TOC/chapter-splitting is planned.
+transcripts, tweet threads, and podcasts — each delivered as an EPUB, converted
+from the content Readwise exposes. A podcast converts only after you've loaded
+its transcript in Readwise Reader (until then the API returns a stub, and the
+download reports that). Configurable via `READWISE_CATEGORIES` (e.g.
+`article,pdf`). Note: long books currently convert to a single chapter —
+TOC/chapter-splitting is planned.
 
 ## Hosted version
 

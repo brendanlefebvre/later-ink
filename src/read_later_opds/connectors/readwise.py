@@ -35,11 +35,14 @@ LOCATIONS = [
 # Readwise categories we serve, all delivered as EPUBs converted from the
 # document's html_content — which Readwise populates for every one of these:
 # PDFs and uploaded EPUBs as document text, videos as transcripts, tweets as
-# unrolled threads. Podcasts are excluded: their transcript is lazy-loaded in
-# Reader and never appears in the API response (just a "Load Transcript" stub).
-# Note: Reader's category for uploaded books is "epub" (not "book"), and for
-# videos is "video" (not "youtube").
-DEFAULT_CATEGORIES = ("article", "email", "pdf", "epub", "video", "tweet")
+# unrolled threads. Podcasts work only once their transcript has been loaded in
+# Reader (until then html_content is a "Load Transcript" stub — see
+# _PODCAST_STUB_MARKER). Note: Reader's category for uploaded books is "epub"
+# (not "book"), and for videos is "video" (not "youtube").
+DEFAULT_CATEGORIES = ("article", "email", "pdf", "epub", "video", "tweet", "podcast")
+
+# Present in html_content only while a podcast transcript is still lazy-loaded.
+_PODCAST_STUB_MARKER = "load-podcast-transcript"
 
 
 def _article_from_doc(doc: dict) -> Article:
@@ -131,6 +134,12 @@ class ReadwiseConnector(Connector):
             raise ArticleUnavailable(
                 "This item has no readable article text to convert to an EPUB "
                 "(it may be a PDF, video, or not yet parsed by Readwise).",
+                status=422,
+            )
+        if _PODCAST_STUB_MARKER in html_content:
+            raise ArticleUnavailable(
+                "This podcast's transcript isn't ready yet. Open it in Readwise "
+                "Reader, load the transcript, then download it again.",
                 status=422,
             )
 
