@@ -192,28 +192,39 @@ async def start_post(
 # ------------------------------------------- single-user self-host mode
 
 
-@app.get("/opds/")
-async def opds_root():
-    entries = [(name, c.description) for name, c in _connectors.items()]
-    return Response(content=opds.root_catalog(entries), media_type=NAV_MEDIA)
-
-
-@app.get("/opds/{connector}/")
-async def opds_connector(connector: str):
-    c = _connectors.get(connector)
-    if not c:
-        raise HTTPException(404, f"Connector '{connector}' not found")
+async def _connector_folder_feed(name: str, c: Connector) -> Response:
     folders = await c.list_folders()
     return Response(
         content=opds.folder_catalog(
-            f"urn:read-later-opds:{connector}",
+            f"urn:read-later-opds:{name}",
             c.description,
             folders,
-            base=f"/opds/{connector}",
+            base=f"/opds/{name}",
             start_href="/opds/",
         ),
         media_type=NAV_MEDIA,
     )
+
+
+@app.api_route("/opds/", methods=["GET", "HEAD"])
+async def opds_root():
+    # With a single connector (the usual self-host case), skip the redundant
+    # connector-selection level and present its folders directly — matching the
+    # already-flat multi-tenant layout. Only offer a chooser when there's a
+    # genuine choice between connectors.
+    if len(_connectors) == 1:
+        name, c = next(iter(_connectors.items()))
+        return await _connector_folder_feed(name, c)
+    entries = [(name, c.description) for name, c in _connectors.items()]
+    return Response(content=opds.root_catalog(entries), media_type=NAV_MEDIA)
+
+
+@app.api_route("/opds/{connector}/", methods=["GET", "HEAD"])
+async def opds_connector(connector: str):
+    c = _connectors.get(connector)
+    if not c:
+        raise HTTPException(404, f"Connector '{connector}' not found")
+    return await _connector_folder_feed(connector, c)
 
 
 @app.get("/opds/{connector}/articles/{article_id}.epub")
@@ -224,7 +235,7 @@ async def opds_epub(connector: str, article_id: str):
     return await _epub_response(c, article_id)
 
 
-@app.get("/opds/{connector}/{folder_id}/")
+@app.api_route("/opds/{connector}/{folder_id}/", methods=["GET", "HEAD"])
 async def opds_folder(connector: str, folder_id: str, cursor: str | None = Query(None)):
     c = _connectors.get(connector)
     if not c:
@@ -265,7 +276,7 @@ async def tenant_delete(secret: str, request: Request, csrf: str | None = Form(N
     return pages.deleted()
 
 
-@app.get("/{secret}/")
+@app.api_route("/{secret}/", methods=["GET", "HEAD"])
 async def tenant_root(secret: str, request: Request):
     token = _resolve_secret(secret, request)
     c = await _tenant_connector(token)
@@ -289,7 +300,7 @@ async def tenant_epub(secret: str, article_id: str, request: Request):
     return await _epub_response(c, article_id)
 
 
-@app.get("/{secret}/{folder_id}/")
+@app.api_route("/{secret}/{folder_id}/", methods=["GET", "HEAD"])
 async def tenant_folder(
     secret: str,
     folder_id: str,

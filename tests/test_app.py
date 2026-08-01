@@ -154,6 +154,26 @@ def test_article_unavailable_is_readable_not_500(client):
     assert "readable article text" in resp.text
 
 
+def test_single_user_root_flattens_to_folders(client):
+    # With exactly one connector, /opds/ should show its folders directly
+    # rather than a one-item "Readwise Reader" chooser.
+    main._connectors["readwise"] = ReadwiseConnector("good-token")
+    try:
+        resp = client.get("/opds/")
+        assert resp.status_code == 200
+        assert "/opds/readwise/later/" in resp.text  # folder link, not a connector link
+        assert "Read Later" in resp.text
+    finally:
+        main._connectors.clear()
+
+
+def test_head_requests_supported_on_feeds(client):
+    secret, _ = _signup(client)
+    assert client.head("/opds/").status_code == 200
+    assert client.head(f"/{secret}/").status_code == 200
+    assert client.head(f"/{secret}/later/").status_code == 200
+
+
 def test_single_user_mode_root(client):
     resp = client.get("/opds/")
     assert resp.status_code == 200
