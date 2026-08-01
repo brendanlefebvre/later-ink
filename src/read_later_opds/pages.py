@@ -52,11 +52,16 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
 <h1>Your Readwise Reader queue, on your e-reader</h1>
 <p><strong>read-later-opds</strong> turns your <strong>Readwise Reader</strong>
 account into an <strong>OPDS catalog</strong>: browse your saved articles from
-KOReader on any Kobo, Kindle, or other device, and download them as clean EPUBs
-&mdash; images embedded, so they read fully offline. No app to install; just add
-one catalog URL.</p>
+KOReader &mdash; or any OPDS reader app &mdash; on Kobo, Boox, and other e-ink
+devices, and download them as clean EPUBs, images embedded, so they read fully
+offline. No app to install; just add one catalog URL.</p>
 <p>It's <strong>free and open source</strong> (MIT), and designed to be
 self-hosted with your own Readwise token.</p>
+<p class="muted">later.ink is a <strong>reading path, not a sync path</strong>:
+it never writes back to Readwise, so articles stay in your queue as you read.
+If you want finished articles to archive and leave the device automatically,
+a KOReader plugin does that &mdash; this trades that for zero install and
+working on any OPDS device.</p>
 {hosted}
 <h2>Self-host it</h2>
 <ol>
