@@ -32,44 +32,50 @@ def _page(title: str, body: str) -> str:
     )
 
 
+REPO_URL = "https://github.com/brendanlefebvre/read-later-opds"
+
+
 def landing(payment_link: str | None, free_signup: bool) -> str:
     if payment_link:
-        cta = f'<a class="btn" href="{escape(payment_link)}">Get your catalog — pay what you want, $1 min</a>'
+        hosted = f'<a class="btn" href="{escape(payment_link)}">Get your catalog</a>'
     elif free_signup:
-        cta = '<a class="btn" href="/start">Get your catalog</a>'
+        hosted = '<a class="btn" href="/start">Get your catalog</a>'
     else:
-        cta = '<p class="muted">Signups are not open yet.</p>'
+        hosted = (
+            '<p class="muted">There is no hosted instance running yet &mdash; '
+            "for now, self-host it (a few minutes with Docker). A free hosted "
+            "instance may come later.</p>"
+        )
     return _page(
-        "Read Later OPDS",
+        "later.ink — read-later on your e-reader",
         f"""
 <h1>Your Readwise Reader queue, on your e-reader</h1>
-<p>read-later-opds turns your <strong>Readwise Reader</strong> account into an
-<strong>OPDS catalog</strong>: browse your saved articles from KOReader on any
-Kobo, Kindle, or other device, and download them as clean EPUBs. No app to
-install &mdash; just add one catalog URL.</p>
-{cta}
-<h2>How it works</h2>
+<p><strong>read-later-opds</strong> turns your <strong>Readwise Reader</strong>
+account into an <strong>OPDS catalog</strong>: browse your saved articles from
+KOReader on any Kobo, Kindle, or other device, and download them as clean EPUBs
+&mdash; images embedded, so they read fully offline. No app to install; just add
+one catalog URL.</p>
+<p>It's <strong>free and open source</strong> (MIT), and designed to be
+self-hosted with your own Readwise token.</p>
+{hosted}
+<h2>Self-host it</h2>
 <ol>
-<li>Pay what you want (minimum $1) for early access</li>
-<li>Paste your Readwise access token</li>
-<li>Type your personal catalog URL into KOReader once</li>
-<li>Read your queue, offline, on e-ink</li>
+<li>Clone <a href="{REPO_URL}">the repository</a></li>
+<li>Put your <a href="https://readwise.io/access_token">Readwise token</a> in a
+<code>.env</code> file</li>
+<li><code>docker-compose up</code> &mdash; your catalog is at
+<code>/opds/</code></li>
+<li>Add that URL to KOReader's OPDS browser and read your queue on e-ink</li>
 </ol>
 <h2>FAQ</h2>
-<p><strong>Is my token safe?</strong> Your token is encrypted at rest with a key
-held outside the database, sent only to Readwise over HTTPS, and used solely to
-fetch your articles. Your catalog URL works like a password &mdash; keep it
-private; you can regenerate it, or delete your token and everything else we
-hold, with one click.</p>
-<p><strong>What does "early access" mean?</strong> A one-time payment gets you
-in now, while the service is young. It isn't a promise of service forever;
-if later.ink grows, it will likely move to a small annual price, and early
-supporters will be treated generously.</p>
 <p><strong>What shows up in the catalog?</strong> Items Reader classifies as
 articles. PDFs, videos, and tweets are filtered out for now.</p>
-<p><strong>Can I self-host instead?</strong> Yes &mdash; the entire server is
-open source (MIT). Run it yourself with docker-compose and skip the hosted
-version entirely.</p>
+<p><strong>Why OPDS?</strong> KOReader (and Calibre, Moon+ Reader, and other
+e-reader apps) already speak it &mdash; no plugin, no app, nothing to install
+beyond typing a URL.</p>
+<p><strong>Other read-later services?</strong> The connector interface is three
+methods; Instapaper and Wallabag are on the roadmap. Contributions welcome on
+<a href="{REPO_URL}">GitHub</a>.</p>
 """,
     )
 
@@ -93,8 +99,8 @@ def start_form(session_id: str | None, error: str | None = None) -> str:
 <p><input type="password" name="readwise_token" placeholder="Readwise access token" required></p>
 <p><button class="btn" type="submit">Create my catalog</button></p>
 </form>
-<p class="muted">Your token is stored server-side, never logged, and only ever
-sent to Readwise.</p>
+<p class="muted">Your token is encrypted at rest with a key held outside the
+database, never logged, and only ever sent to Readwise.</p>
 """,
     )
 
