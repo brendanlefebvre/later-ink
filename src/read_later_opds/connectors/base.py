@@ -11,6 +11,17 @@ class UpstreamError(Exception):
         self.status = status
 
 
+class ArticleUnavailable(Exception):
+    """The item is in the catalog but can't be turned into an EPUB — missing
+    upstream, or with no extractable article text. Surfaced to the client as a
+    readable message rather than a 500 so e-reader users know why a download
+    failed."""
+
+    def __init__(self, message: str, status: int = 422):
+        super().__init__(message)
+        self.status = status
+
+
 @dataclass
 class Folder:
     id: str
