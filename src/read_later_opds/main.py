@@ -1,12 +1,13 @@
 import hashlib
 import hmac
 import logging
+import os
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from . import config, opds, pages
 from .connectors import readwise
@@ -133,6 +134,20 @@ async def article_unavailable_handler(request: Request, exc: ArticleUnavailable)
 @app.get("/", response_class=HTMLResponse)
 async def landing():
     return pages.landing(config.get_stripe_payment_link(), config.allow_free_signup())
+
+
+_FONT_PATH = os.path.join(os.path.dirname(__file__), "assets", "fonts", "LeagueSpartan-VF.ttf")
+
+
+@app.get("/assets/fonts/league-spartan.ttf")
+async def league_spartan_font():
+    # The pages' display face, served from the bundled cover font so the site
+    # needs no external font CDN. Immutable + long cache; the file never changes.
+    return FileResponse(
+        _FONT_PATH,
+        media_type="font/ttf",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @app.get("/health")
