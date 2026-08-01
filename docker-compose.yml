@@ -5,4 +5,8 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - DATABASE_PATH=/data/app.db
+    volumes:
+      - ./data:/data
     restart: unless-stopped

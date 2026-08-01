@@ -4,6 +4,16 @@ from .base import Article, Connector, Folder
 
 BASE_URL = "https://readwise.io/api/v3"
 
+async def validate_token(token: str) -> bool:
+    """True if the token is accepted by the Readwise API."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(
+            f"{BASE_URL}/list/",
+            headers={"Authorization": f"Token {token}"},
+        )
+    return resp.status_code == 200
+
+
 LOCATIONS = [
     Folder("later", "Read Later", "Articles saved for later"),
     Folder("new", "New", "Recently added articles"),

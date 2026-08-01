@@ -1,0 +1,25 @@
+# Fly.io config — deploy with `fly launch` / `fly deploy`.
+# Set secrets first:
+#   fly secrets set STRIPE_SECRET_KEY=sk_live_... STRIPE_PAYMENT_LINK=https://buy.stripe.com/... BASE_URL=https://yourdomain.tld
+app = "read-later-opds"
+primary_region = "ewr"
+
+[env]
+  DATABASE_PATH = "/data/app.db"
+
+[[mounts]]
+  source = "data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    method = "GET"
+    path = "/health"

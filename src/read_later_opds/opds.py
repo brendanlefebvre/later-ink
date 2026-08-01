@@ -42,6 +42,7 @@ def _make_feed(
     feed_id: str,
     title: str,
     self_href: str,
+    start_href: str,
     self_type: str = NAV_TYPE,
 ) -> etree._Element:
     feed = etree.Element(f"{{{ATOM_NS}}}feed", nsmap=NSMAP)
@@ -49,7 +50,7 @@ def _make_feed(
     _add_text(feed, "title", title)
     _add_text(feed, "updated", _now_iso())
     _add_link(feed, "self", self_href, self_type)
-    _add_link(feed, "start", "/opds/", NAV_TYPE)
+    _add_link(feed, "start", start_href, NAV_TYPE)
     return feed
 
 
@@ -57,8 +58,8 @@ def _serialize(feed: etree._Element) -> bytes:
     return etree.tostring(feed, xml_declaration=True, encoding="UTF-8", pretty_print=True)
 
 
-def root_catalog(connectors: list[tuple[str, str]]) -> bytes:
-    feed = _make_feed("urn:read-later-opds:root", "Read Later", "/opds/")
+def root_catalog(connectors: list[tuple[str, str]], base: str = "/opds") -> bytes:
+    feed = _make_feed("urn:read-later-opds:root", "Read Later", f"{base}/", f"{base}/")
 
     for name, description in connectors:
         entry = etree.SubElement(feed, "entry")
@@ -68,67 +69,51 @@ def root_catalog(connectors: list[tuple[str, str]]) -> bytes:
         content = etree.SubElement(entry, "content")
         content.set("type", "text")
         content.text = f"Articles from {description}"
-        _add_link(entry, "subsection", f"/opds/{name}/", NAV_TYPE)
+        _add_link(entry, "subsection", f"{base}/{name}/", NAV_TYPE)
 
     return _serialize(feed)
 
 
-def connector_catalog(
-    connector_name: str,
-    connector_title: str,
+def folder_catalog(
+    feed_id: str,
+    title: str,
     folders: list[Folder],
+    base: str,
+    start_href: str,
 ) -> bytes:
-    feed = _make_feed(
-        f"urn:read-later-opds:{connector_name}",
-        connector_title,
-        f"/opds/{connector_name}/",
-    )
+    feed = _make_feed(feed_id, title, f"{base}/", start_href)
 
     for folder in folders:
         entry = etree.SubElement(feed, "entry")
-        _add_text(entry, "id", f"urn:read-later-opds:{connector_name}:{folder.id}")
+        _add_text(entry, "id", f"{feed_id}:{folder.id}")
         _add_text(entry, "title", folder.title)
         _add_text(entry, "updated", _now_iso())
         if folder.description:
             content = etree.SubElement(entry, "content")
             content.set("type", "text")
             content.text = folder.description
-        _add_link(
-            entry,
-            "subsection",
-            f"/opds/{connector_name}/{folder.id}/",
-            ACQ_TYPE,
-        )
+        _add_link(entry, "subsection", f"{base}/{folder.id}/", ACQ_TYPE)
 
     return _serialize(feed)
 
 
 def article_feed(
-    connector_name: str,
-    folder_id: str,
-    folder_title: str,
+    feed_id: str,
+    title: str,
     articles: list[Article],
+    self_href: str,
+    epub_base: str,
+    start_href: str,
     next_cursor: str | None = None,
 ) -> bytes:
-    self_href = f"/opds/{connector_name}/{folder_id}/"
-    feed = _make_feed(
-        f"urn:read-later-opds:{connector_name}:{folder_id}",
-        f"{folder_title}",
-        self_href,
-        ACQ_TYPE,
-    )
+    feed = _make_feed(feed_id, title, self_href, start_href, ACQ_TYPE)
 
     if next_cursor:
-        _add_link(
-            feed,
-            "next",
-            f"/opds/{connector_name}/{folder_id}/?cursor={next_cursor}",
-            ACQ_TYPE,
-        )
+        _add_link(feed, "next", f"{self_href}?cursor={next_cursor}", ACQ_TYPE)
 
     for article in articles:
         entry = etree.SubElement(feed, "entry")
-        _add_text(entry, "id", f"urn:read-later-opds:{connector_name}:article:{article.id}")
+        _add_text(entry, "id", f"{feed_id}:article:{article.id}")
         _add_text(entry, "title", article.title)
         _add_text(entry, "updated", article.updated.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
@@ -144,7 +129,7 @@ def article_feed(
         _add_link(
             entry,
             "http://opds-spec.org/acquisition",
-            f"/opds/{connector_name}/articles/{article.id}.epub",
+            f"{epub_base}/{article.id}.epub",
             EPUB_TYPE,
         )
 

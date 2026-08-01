@@ -10,6 +10,7 @@ dependencies = [
     "ebooklib>=0.18",
     "lxml>=5.0",
     "httpx>=0.27",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
