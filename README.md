@@ -1,4 +1,4 @@
-# read-later-opds
+# read-later-opds · [later.ink](https://later.ink)
 
 **Your Readwise Reader queue, on your e-reader.**
 
@@ -26,12 +26,13 @@ Your catalog is now at `http://your-host:8000/opds/`.
 the URL. Browse folders (Later, New, Shortlist, Archive), tap an article to
 download and read.
 
-## Hosted version
+## Hosted version — [later.ink](https://later.ink)
 
-Don't want to run a server? There's a hosted version — pay what you want
-($1 minimum, one-time, early access). You paste your Readwise token, we give
-you a short personal catalog URL designed to be easy to type on an e-ink
-keyboard.
+Don't want to run a server? Use the hosted version at
+**[later.ink](https://later.ink)** — pay what you want ($1 minimum, one-time,
+early access). You paste your Readwise token and get a short personal catalog
+URL like `later.ink/maple-crater-nine/`, designed to be easy to type on an
+e-ink keyboard.
 
 ## Architecture
 
