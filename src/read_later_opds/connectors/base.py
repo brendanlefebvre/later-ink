@@ -39,6 +39,7 @@ class Article:
     updated: datetime = field(default_factory=datetime.now)
     word_count: int | None = None
     language: str | None = None
+    category: str | None = None
 
 
 class Connector(ABC):
