@@ -14,6 +14,15 @@ No plugin, no app, no sync daemon — OPDS is built into KOReader.
 token. Run it on a NAS, a Raspberry Pi, a VPS, or your laptop — it holds nothing
 but your own reading queue.
 
+> **Scope:** later.ink is a *reading path, not a sync path*. It never writes
+> back to Readwise, so articles stay in your queue as you read them. If you want
+> finished articles archived and removed from the device automatically, the
+> [Endle/readwisereader](https://github.com/Endle/readwisereader) KOReader
+> plugin does that — this project trades write-back for zero install and working
+> on any OPDS client. (Note: Readwise already serves Kindle natively via
+> send-to-Kindle; the sweet spot here is Kobo, Boox, and other non-Kindle
+> e-ink.)
+
 ## Self-host quickstart
 
 ```bash
