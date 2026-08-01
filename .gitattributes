@@ -1,3 +1,9 @@
 # Keep line endings LF in the repo regardless of platform (we edit from both
 # Linux and Windows). Prevents CRLF churn on Windows checkouts.
 * text=auto eol=lf
+
+# Binary assets must never be line-ending normalized.
+*.ttf binary
+*.jpg binary
+*.png binary
+*.epub binary
