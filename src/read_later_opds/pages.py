@@ -32,7 +32,7 @@ def _page(title: str, body: str) -> str:
     )
 
 
-REPO_URL = "https://github.com/brendanlefebvre/read-later-opds"
+REPO_URL = "https://github.com/brendanlefebvre/later-ink"
 
 
 def landing(payment_link: str | None, free_signup: bool) -> str:
@@ -47,7 +47,7 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
             "instance may come later.</p>"
         )
     return _page(
-        "later.ink — read-later on your e-reader",
+        "Later.Ink — read-later on your e-reader",
         f"""
 <h1>Your Readwise Reader queue, on your e-reader</h1>
 <p><strong>Later.Ink</strong> turns your <strong>Readwise Reader</strong>
