@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="read-later-opds",
+    title="Later.Ink",
     version="0.2.0",
     docs_url=None,
     redoc_url=None,

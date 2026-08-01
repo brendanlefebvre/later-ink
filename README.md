@@ -1,8 +1,8 @@
-# read-later-opds · [later.ink](https://later.ink)
+# Later.Ink · [later.ink](https://later.ink)
 
 **Your Readwise Reader queue, on your e-reader.**
 
-read-later-opds is a small server that turns your [Readwise Reader](https://readwise.io/read)
+Later.Ink is a small server that turns your [Readwise Reader](https://readwise.io/read)
 account into an [OPDS catalog](https://opds.io/). Point KOReader (or any OPDS
 client — Calibre, Moon+ Reader, …) at one URL and browse your saved articles,
 downloading any of them as a clean EPUB, generated on the fly from the
@@ -26,8 +26,8 @@ but your own reading queue.
 ## Self-host quickstart
 
 ```bash
-git clone https://github.com/brendanlefebvre/read-later-opds.git
-cd read-later-opds
+git clone https://github.com/brendanlefebvre/later-ink.git
+cd later-ink
 cp .env.example .env
 # put your token from https://readwise.io/access_token into .env
 docker-compose up -d

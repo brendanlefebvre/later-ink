@@ -4,7 +4,7 @@
 #   fly secrets set ENCRYPTION_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 # Losing ENCRYPTION_KEY means every stored token is unreadable and all users
 # must re-onboard — keep it safe.
-app = "read-later-opds"
+app = "later-ink"
 primary_region = "ewr"
 
 [env]
