@@ -50,7 +50,7 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
         "later.ink — read-later on your e-reader",
         f"""
 <h1>Your Readwise Reader queue, on your e-reader</h1>
-<p><strong>read-later-opds</strong> turns your <strong>Readwise Reader</strong>
+<p><strong>Later.Ink</strong> turns your <strong>Readwise Reader</strong>
 account into an <strong>OPDS catalog</strong>: browse your saved articles from
 KOReader &mdash; or any OPDS reader app &mdash; on Kobo, Boox, and other e-ink
 devices, and download them as clean EPUBs, images embedded, so they read fully
