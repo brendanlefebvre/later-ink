@@ -30,13 +30,40 @@ def _list(conn: ReadwiseConnector):
     return asyncio.run(run())
 
 
-def test_default_categories_cover_everything_but_podcasts():
+def test_default_categories_cover_all_content_types():
     articles, cursor = _list(ReadwiseConnector("tok"))
-    # article, email, pdf, epub, tweet, video — but NOT podcast (id 7)
-    assert {a.id for a in articles} == {"1", "2", "3", "4", "5", "6"}
+    # article, email, pdf, epub, tweet, video, podcast — all included
+    assert {a.id for a in articles} == {"1", "2", "3", "4", "5", "6", "7"}
     assert cursor == "next123"  # pagination cursor passed through
 
 
 def test_categories_configurable():
     articles, _ = _list(ReadwiseConnector("tok", categories=("article", "pdf")))
     assert {a.id for a in articles} == {"1", "3"}
+
+
+def test_unloaded_podcast_stub_gives_load_transcript_message():
+    import pytest
+
+    from read_later_opds.connectors.base import ArticleUnavailable
+
+    conn = ReadwiseConnector("tok")
+    stub = (
+        "<div class='rw-podcast-description'>"
+        "<a data-rw-button='load-podcast-transcript'>Load Transcript</a></div>"
+    )
+
+    async def run():
+        async def fake_get(path, params):
+            return {"results": [{"id": "9", "title": "Pod", "html_content": stub}]}
+
+        conn._get = fake_get
+        try:
+            return await conn.get_article_html("9")
+        finally:
+            await conn.close()
+
+    with pytest.raises(ArticleUnavailable) as exc:
+        asyncio.run(run())
+    assert exc.value.status == 422
+    assert "transcript" in str(exc.value).lower()
