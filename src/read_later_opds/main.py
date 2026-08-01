@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from . import config, opds, pages
 from .connectors import readwise
-from .connectors.base import Connector, UpstreamError
+from .connectors.base import ArticleUnavailable, Connector, UpstreamError
 from .connectors.readwise import ReadwiseConnector
 from .epub import build_epub
 from .payments import verify_checkout_session
@@ -120,6 +120,11 @@ def _feed_id(secret: str) -> str:
 async def upstream_error_handler(request: Request, exc: UpstreamError):
     # KOReader shows response text on failed downloads — keep it readable.
     return Response(content=str(exc), status_code=502, media_type="text/plain")
+
+
+@app.exception_handler(ArticleUnavailable)
+async def article_unavailable_handler(request: Request, exc: ArticleUnavailable):
+    return Response(content=str(exc), status_code=exc.status, media_type="text/plain")
 
 
 # ---------------------------------------------------------------- pages

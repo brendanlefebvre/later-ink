@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from .base import Article, Connector, Folder, UpstreamError
+from .base import Article, ArticleUnavailable, Connector, Folder, UpstreamError
 
 BASE_URL = "https://readwise.io/api/v3"
 
@@ -106,13 +106,19 @@ class ReadwiseConnector(Connector):
 
         results = data.get("results", [])
         if not results:
-            raise ValueError(f"Article {article_id} not found")
+            raise ArticleUnavailable(
+                "This article is no longer in your Readwise account.", status=404
+            )
 
         doc = results[0]
         article = _article_from_doc(doc)
         html_content = doc.get("html_content", "")
         if not html_content:
-            raise ValueError(f"No HTML content for article {article_id}")
+            raise ArticleUnavailable(
+                "This item has no readable article text to convert to an EPUB "
+                "(it may be a PDF, video, or not yet parsed by Readwise).",
+                status=422,
+            )
 
         return article, html_content
 

@@ -137,6 +137,23 @@ def test_upstream_error_becomes_502(client):
     assert "rate-limiting" in resp.text
 
 
+def test_article_unavailable_is_readable_not_500(client):
+    from read_later_opds.connectors.base import ArticleUnavailable
+
+    async def no_content(self, article_id):
+        raise ArticleUnavailable("no readable article text here", status=422)
+
+    secret, _ = _signup(client)
+    orig = ReadwiseConnector.get_article_html
+    ReadwiseConnector.get_article_html = no_content
+    try:
+        resp = client.get(f"/{secret}/articles/999.epub")
+    finally:
+        ReadwiseConnector.get_article_html = orig
+    assert resp.status_code == 422
+    assert "readable article text" in resp.text
+
+
 def test_single_user_mode_root(client):
     resp = client.get("/opds/")
     assert resp.status_code == 200
