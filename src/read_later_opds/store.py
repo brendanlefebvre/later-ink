@@ -11,7 +11,7 @@ from .words import WORDS
 logger = logging.getLogger(__name__)
 
 RESERVED_PATHS = {
-    "opds", "start", "health", "static", "docs", "openapi.json",
+    "opds", "start", "health", "static", "assets", "docs", "openapi.json",
     "favicon.ico", "robots.txt",
 }
 
