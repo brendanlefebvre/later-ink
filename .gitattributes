@@ -1,0 +1,3 @@
+# Keep line endings LF in the repo regardless of platform (we edit from both
+# Linux and Windows). Prevents CRLF churn on Windows checkouts.
+* text=auto eol=lf
