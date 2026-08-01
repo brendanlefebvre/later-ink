@@ -54,6 +54,7 @@ def _article_from_doc(doc: dict) -> Article:
         url=doc.get("source_url") or doc.get("url"),
         word_count=doc.get("word_count"),
         language=doc.get("language"),
+        category=doc.get("category"),
     )
 
 

@@ -1,6 +1,7 @@
 import hashlib
 import io
 import logging
+import re
 from html import escape
 
 import httpx
@@ -9,9 +10,9 @@ from lxml.html import fromstring, tostring
 
 logger = logging.getLogger(__name__)
 
-# One image-heavy article must not blow up a download over a Kobo's wifi.
-MAX_IMAGES = 20
-MAX_IMAGE_BYTES_TOTAL = 10 * 1024 * 1024
+# One image-heavy download must not blow up over a Kobo's wifi.
+MAX_IMAGES = 30
+MAX_IMAGE_BYTES_TOTAL = 15 * 1024 * 1024
 IMAGE_FETCH_TIMEOUT = 10.0
 
 _EXT_BY_TYPE = {
@@ -22,6 +23,15 @@ _EXT_BY_TYPE = {
     "image/svg+xml": "svg",
 }
 
+NORMALIZE_CSS = (
+    "body { font-family: serif; line-height: 1.6; max-width: 40em; margin: 0 auto; "
+    "padding: 1em; } img { max-width: 100%; height: auto; }"
+)
+
+# Readwise tags each section of a parsed EPUB with this attribute; it's the most
+# reliable split point. Falls back to <section>, then to a single chapter.
+_TOC_ATTR = "data-rw-epub-toc"
+
 
 def _fallback_html(title: str, source_url: str | None) -> str:
     link = (
@@ -31,7 +41,7 @@ def _fallback_html(title: str, source_url: str | None) -> str:
     )
     return (
         f"<h1>{escape(title)}</h1>"
-        f"<p>This article could not be converted for offline reading.</p>{link}"
+        f"<p>This item could not be converted for offline reading.</p>{link}"
     )
 
 
@@ -76,6 +86,42 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
     return items
 
 
+def _split_units(doc) -> list | None:
+    """Top-level section elements to become chapters, or None for a single chapter."""
+    marked = [
+        el for el in doc.xpath(f"//*[@{_TOC_ATTR}]")
+        if not el.xpath(f"ancestor::*[@{_TOC_ATTR}]")
+    ]
+    if len(marked) < 2:
+        marked = [s for s in doc.xpath("//section") if not s.xpath("ancestor::section")]
+    return marked if len(marked) >= 2 else None
+
+
+def _unit_title(el, index: int) -> str:
+    for h in el.xpath(".//h1 | .//h2 | .//h3 | .//h4 | .//h5 | .//h6"):
+        text = " ".join(h.text_content().split()).strip()
+        if text:
+            return text[:120]
+    etype = el.get("epub:type")
+    if etype:
+        return etype.replace("-", " ").title()
+    return f"Section {index + 1}"
+
+
+def _serialize(el) -> str:
+    # method="xml" for XHTML well-formedness; drop epub:type (its namespace is
+    # not declared on the chapters ebooklib generates).
+    xml = tostring(el, encoding="unicode", method="xml")
+    return re.sub(r'\s+epub:type="[^"]*"', "", xml)
+
+
+async def _embed_images_maybe(doc, client: httpx.AsyncClient | None) -> list[epub.EpubItem]:
+    if client is not None:
+        return await _embed_images(doc, client)
+    async with httpx.AsyncClient() as owned:
+        return await _embed_images(doc, owned)
+
+
 async def build_epub(
     title: str,
     author: str | None,
@@ -83,8 +129,16 @@ async def build_epub(
     source_url: str | None = None,
     identifier: str | None = None,
     language: str = "en",
+    preserve_styles: bool = False,
     image_client: httpx.AsyncClient | None = None,
 ) -> bytes:
+    """Convert Readwise html_content into an EPUB.
+
+    Splits into per-section chapters (with a nav TOC) when the source carries
+    structure, else emits a single chapter. When preserve_styles is set (epub
+    uploads), the source's own stylesheet is kept and scoped; otherwise content
+    is normalized to a clean readable stylesheet.
+    """
     book = epub.EpubBook()
 
     if identifier is None:
@@ -92,44 +146,78 @@ async def build_epub(
     book.set_identifier(f"read-later-opds-{identifier}")
     book.set_title(title)
     book.set_language(language or "en")
-
     if author:
         book.add_author(author)
     if source_url:
         book.add_metadata("DC", "source", source_url)
 
     image_items: list[epub.EpubItem] = []
+    chapters_src: list[tuple[str, str]] = []
+    original_css = ""
+    use_orig = False
+
     try:
         doc = fromstring(html_content)
-        for el in doc.iter("script", "style"):
-            el.getparent().remove(el)
-        if image_client is not None:
-            image_items = await _embed_images(doc, image_client)
+        if preserve_styles:
+            original_css = "\n".join(s.text_content() for s in doc.xpath("//style"))
+        for el in doc.xpath("//script | //style"):
+            parent = el.getparent()
+            if parent is not None:
+                parent.remove(el)
+
+        image_items = await _embed_images_maybe(doc, image_client)
+
+        units = _split_units(doc)
+        if units is None:
+            chapters_src = [(title, _serialize(doc))]
         else:
-            async with httpx.AsyncClient() as client:
-                image_items = await _embed_images(doc, client)
-        clean = tostring(doc, encoding="unicode", method="xml")
+            chapters_src = [(_unit_title(el, i), _serialize(el)) for i, el in enumerate(units)]
+
+        use_orig = preserve_styles and bool(original_css.strip())
     except Exception:
         logger.warning("HTML parse failed for %r; emitting fallback page", title)
-        clean = _fallback_html(title, source_url)
+        chapters_src = [(title, _fallback_html(title, source_url))]
+        use_orig = False
 
-    xhtml = (
-        f'<html xmlns="http://www.w3.org/1999/xhtml">'
-        f"<head><title>{escape(title)}</title>"
-        f"<style>body {{ font-family: serif; line-height: 1.6; max-width: 40em; margin: 0 auto; padding: 1em; }} img {{ max-width: 100%; }}</style>"
-        f"</head><body>{clean}</body></html>"
+    # A single stylesheet linked from every chapter: the source's own (scoped)
+    # for epub uploads, otherwise our normalized one.
+    css_item = epub.EpubItem(
+        uid="style",
+        file_name="style/main.css",
+        media_type="text/css",
+        content=(original_css if use_orig else NORMALIZE_CSS).encode("utf-8"),
     )
+    book.add_item(css_item)
 
-    chapter = epub.EpubHtml(title=title, file_name="article.xhtml")
-    chapter.set_content(xhtml.encode("utf-8"))
-    book.add_item(chapter)
+    chapters = []
+    for i, (ctitle, inner) in enumerate(chapters_src):
+        if use_orig:
+            # Readwise's original epub CSS is scoped to this container class.
+            body = f'<div class="document-content epub-original-styles">{inner}</div>'
+        else:
+            body = inner
+        xhtml = (
+            '<html xmlns="http://www.w3.org/1999/xhtml"><head>'
+            f"<title>{escape(ctitle or '')}</title></head><body>{body}</body></html>"
+        )
+        chapter = epub.EpubHtml(
+            uid=f"chap_{i:03d}",
+            title=ctitle or f"Section {i + 1}",
+            file_name=f"chap_{i:03d}.xhtml",
+            lang=language,
+        )
+        chapter.set_content(xhtml.encode("utf-8"))
+        chapter.add_link(href="style/main.css", rel="stylesheet", type="text/css")
+        book.add_item(chapter)
+        chapters.append(chapter)
+
     for item in image_items:
         book.add_item(item)
 
-    book.toc = [chapter]
+    book.toc = chapters
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
-    book.spine = ["nav", chapter]
+    book.spine = ["nav", *chapters]
 
     buf = io.BytesIO()
     epub.write_epub(buf, book)
