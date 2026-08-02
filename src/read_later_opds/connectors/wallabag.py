@@ -101,10 +101,16 @@ class WallabagConnector(Connector):
             raise UpstreamError(
                 f"Wallabag rejected the credentials ({resp.status_code})", resp.status_code
             )
-        data = resp.json()
-        self._access_token = data["access_token"]
-        self._refresh_token = data.get("refresh_token")
-        self._expiry = time.monotonic() + float(data.get("expires_in", 3600)) - _TOKEN_MARGIN
+        try:
+            data = resp.json()
+            access_token = data["access_token"]
+            refresh_token = data.get("refresh_token")
+            expires_in = float(data.get("expires_in", 3600))
+        except (ValueError, KeyError, TypeError) as e:
+            raise UpstreamError("Wallabag returned an unexpected auth response") from e
+        self._access_token = access_token
+        self._refresh_token = refresh_token
+        self._expiry = time.monotonic() + expires_in - _TOKEN_MARGIN
 
     async def _ensure_token(self) -> None:
         """Obtain (or refresh) a bearer token, serialized so parallel requests
@@ -122,7 +128,11 @@ class WallabagConnector(Connector):
                         {**base, "grant_type": "refresh_token", "refresh_token": self._refresh_token}
                     )
                     return
-                except UpstreamError:
+                except UpstreamError as e:
+                    # Only an invalid/expired token justifies a password retry;
+                    # re-raise transient failures instead of doubling the calls.
+                    if e.status not in (400, 401):
+                        raise
                     self._refresh_token = None  # expired/invalid — fall back to password grant
             await self._fetch_token(
                 {
@@ -162,7 +172,10 @@ class WallabagConnector(Connector):
             raise UpstreamError("Wallabag is rate-limiting — try again in a minute", 429)
         if resp.status_code >= 400:
             raise UpstreamError(f"Wallabag returned an error ({resp.status_code})", resp.status_code)
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as e:
+            raise UpstreamError("Wallabag returned an unexpected response") from e
 
     async def list_folders(self) -> list[Folder]:
         return FOLDERS

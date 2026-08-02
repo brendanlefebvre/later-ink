@@ -163,6 +163,28 @@ def test_401_triggers_reauth_and_retry():
     assert state["entries"] == 2  # retried once
 
 
+def test_refresh_token_grant_used_when_available():
+    reqs: list = []
+
+    def h(request):
+        reqs.append(request)
+        if request.url.path == "/oauth/v2/token":
+            return httpx.Response(200, json={"access_token": "AT2", "expires_in": 3600})
+        if request.url.path == "/api/entries.json":
+            return httpx.Response(200, json=ENTRIES_PAGE)
+        return httpx.Response(404, json={})
+
+    conn = _make_conn(h)
+    conn._refresh_token = "seeded-RT"  # a cached refresh token from a prior login
+    _run(conn, lambda: conn.list_articles("all"))
+
+    token_req = next(r for r in reqs if r.url.path == "/oauth/v2/token")
+    body = token_req.content.decode()
+    assert "grant_type=refresh_token" in body  # refresh grant preferred over password
+    assert "refresh_token=seeded-RT" in body
+    assert "grant_type=password" not in body
+
+
 def test_search_uses_native_endpoint():
     reqs: list = []
 
