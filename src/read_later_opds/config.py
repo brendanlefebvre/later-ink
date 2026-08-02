@@ -38,6 +38,26 @@ def trust_proxy_headers() -> bool:
     return os.environ.get("TRUST_PROXY_HEADERS", "").lower() in ("1", "true", "yes")
 
 
+def get_wallabag_config() -> dict[str, str] | None:
+    """Self-host Wallabag connector settings, or None if not fully configured.
+
+    Wallabag's API needs an OAuth2 client (client id/secret) plus the account
+    username/password. All five must be present to enable the connector.
+    """
+    keys = {
+        "url": "WALLABAG_URL",
+        "client_id": "WALLABAG_CLIENT_ID",
+        "client_secret": "WALLABAG_CLIENT_SECRET",
+        "username": "WALLABAG_USERNAME",
+        "password": "WALLABAG_PASSWORD",
+    }
+    values = {k: os.environ.get(env, "").strip() for k, env in keys.items()}
+    if not all(values.values()):
+        return None
+    values["url"] = values["url"].rstrip("/")
+    return values
+
+
 def get_readwise_categories() -> tuple[str, ...]:
     """Readwise categories to surface, e.g. READWISE_CATEGORIES=article,book,pdf.
     Defaults to articles + books."""
