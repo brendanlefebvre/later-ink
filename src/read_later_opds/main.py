@@ -4,6 +4,7 @@ import logging
 import os
 from collections import OrderedDict
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, Form, HTTPException, Query, Request
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 NAV_MEDIA = "application/atom+xml;profile=opds-catalog;kind=navigation"
 ACQ_MEDIA = "application/atom+xml;profile=opds-catalog;kind=acquisition"
+OPENSEARCH_MEDIA = "application/opensearchdescription+xml"
 
 MAX_TENANT_CONNECTORS = 200
 
@@ -229,6 +231,7 @@ async def _connector_folder_feed(name: str, c: Connector) -> Response:
             folders,
             base=f"/opds/{name}",
             start_href="/opds/",
+            search_href=f"/opds/{name}/search.xml",
         ),
         media_type=NAV_MEDIA,
     )
@@ -253,6 +256,33 @@ async def opds_connector(connector: str):
     if not c:
         raise HTTPException(404, f"Connector '{connector}' not found")
     return await _connector_folder_feed(connector, c)
+
+
+@app.api_route("/opds/{connector}/search.xml", methods=["GET", "HEAD"])
+async def opds_search_description(connector: str):
+    c = _connectors.get(connector)
+    if not c:
+        raise HTTPException(404, f"Connector '{connector}' not found")
+    return Response(
+        content=opds.search_description(f"/opds/{connector}/search?q={{searchTerms}}"),
+        media_type=OPENSEARCH_MEDIA,
+    )
+
+
+@app.api_route("/opds/{connector}/search", methods=["GET", "HEAD"])
+async def opds_search(connector: str, q: str = Query(""), cursor: str | None = Query(None)):
+    c = _connectors.get(connector)
+    if not c:
+        raise HTTPException(404, f"Connector '{connector}' not found")
+    return await _search_response(
+        c,
+        q,
+        cursor,
+        feed_id=f"urn:read-later-opds:{connector}:search",
+        self_href=f"/opds/{connector}/search?q={quote(q)}",
+        epub_base=f"/opds/{connector}/articles",
+        start_href="/opds/",
+    )
 
 
 @app.get("/opds/{connector}/articles/{article_id}.epub")
@@ -316,6 +346,7 @@ async def tenant_root(secret: str, request: Request):
             folders,
             base=f"/{secret}",
             start_href=f"/{secret}/",
+            search_href=f"/{secret}/search.xml",
         ),
         media_type=NAV_MEDIA,
     )
@@ -326,6 +357,35 @@ async def tenant_epub(secret: str, article_id: str, request: Request):
     token = _resolve_secret(secret, request)
     c = await _tenant_connector(token)
     return await _epub_response(c, article_id)
+
+
+@app.api_route("/{secret}/search.xml", methods=["GET", "HEAD"])
+async def tenant_search_description(secret: str, request: Request):
+    _resolve_secret(secret, request)
+    return Response(
+        content=opds.search_description(f"/{secret}/search?q={{searchTerms}}"),
+        media_type=OPENSEARCH_MEDIA,
+    )
+
+
+@app.api_route("/{secret}/search", methods=["GET", "HEAD"])
+async def tenant_search(
+    secret: str,
+    request: Request,
+    q: str = Query(""),
+    cursor: str | None = Query(None),
+):
+    token = _resolve_secret(secret, request)
+    c = await _tenant_connector(token)
+    return await _search_response(
+        c,
+        q,
+        cursor,
+        feed_id=f"{_feed_id(secret)}:search",
+        self_href=f"/{secret}/search?q={quote(q)}",
+        epub_base=f"/{secret}/articles",
+        start_href=f"/{secret}/",
+    )
 
 
 @app.api_route("/{secret}/{folder_id}/", methods=["GET", "HEAD"])
@@ -370,6 +430,30 @@ async def _folder_response(
         content=opds.article_feed(
             feed_id,
             folder.title,
+            articles,
+            self_href=self_href,
+            epub_base=epub_base,
+            start_href=start_href,
+            next_cursor=next_cursor,
+        ),
+        media_type=ACQ_MEDIA,
+    )
+
+
+async def _search_response(
+    c: Connector,
+    query: str,
+    cursor: str | None,
+    feed_id: str,
+    self_href: str,
+    epub_base: str,
+    start_href: str,
+) -> Response:
+    articles, next_cursor = await c.search(query, cursor)
+    return Response(
+        content=opds.article_feed(
+            feed_id,
+            f"Search: {query}" if query.strip() else "Search",
             articles,
             self_href=self_href,
             epub_base=epub_base,

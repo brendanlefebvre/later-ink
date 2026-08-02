@@ -60,7 +60,9 @@ Your catalog is now at `http://your-host:8000/opds/`.
 **KOReader setup:** top menu → magnifying glass → *OPDS catalog* → `+` → enter
 the URL. Browse folders (Later, New, Shortlist, Archive, Feed), tap an article
 to download and read. Images are embedded in the EPUB, so articles read fully
-offline.
+offline. Use KOReader's OPDS search box to find articles by title, author, or
+summary; search scans your most recent saved items (a bounded slice of a very
+large queue) rather than the entire history.
 
 **On iPhone/iPad:** use an ebook reader that supports OPDS — Fablum, justRead, or
 PocketBook — and add the same catalog URL. **On desktop:** Thorium Reader works too.
