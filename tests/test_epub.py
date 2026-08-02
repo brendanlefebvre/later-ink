@@ -1,5 +1,6 @@
 import asyncio
 import io
+import re
 import zipfile
 
 import httpx
@@ -26,6 +27,11 @@ def _chapter_files(zf: zipfile.ZipFile) -> list[str]:
     return sorted(n for n in zf.namelist() if n.startswith("EPUB/chap_"))
 
 
+def _spine_idrefs(zf: zipfile.ZipFile) -> list[str]:
+    opf = zf.read("EPUB/content.opf").decode()
+    return re.findall(r'<itemref[^>]*\bidref="([^"]+)"', opf)
+
+
 def test_single_chapter_epub():
     data = asyncio.run(
         build_epub(title="Test", author="Ann", html_content="<h1>Hi</h1><p>Body</p>", identifier="abc123")
@@ -33,6 +39,31 @@ def test_single_chapter_epub():
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert _chapter_files(zf) == [CH0]  # no structure -> one chapter
         assert b"Body" in zf.read(CH0)
+
+
+def test_single_chapter_opens_on_cover_without_toc_page():
+    # One-entry pieces (like a plain article) shouldn't lead with a pointless
+    # one-item ToC page; they should open straight on the cover.
+    data = asyncio.run(
+        build_epub(title="Solo", author="Ann", html_content="<h1>Hi</h1><p>Body</p>", identifier="solo1")
+    )
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        assert _spine_idrefs(zf) == ["cover", "chap_000"]  # cover first, no nav page
+        assert "EPUB/cover.xhtml" in zf.namelist()  # visible cover page rendered
+
+
+def test_multi_chapter_keeps_toc_page_after_cover():
+    html = (
+        "<div>"
+        "<section data-rw-epub-toc='rw-1'><h2>One</h2><p>alpha</p></section>"
+        "<section data-rw-epub-toc='rw-2'><h2>Two</h2><p>beta</p></section>"
+        "</div>"
+    )
+    data = asyncio.run(build_epub(title="Book", author="Auth", html_content=html, identifier="multi1"))
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        # cover opens the book; the ToC page stays because there's real structure
+        assert _spine_idrefs(zf) == ["cover", "nav", "chap_000", "chap_001"]
+        assert "EPUB/cover.xhtml" in zf.namelist()
 
 
 def test_sections_split_into_chapters_with_toc():
