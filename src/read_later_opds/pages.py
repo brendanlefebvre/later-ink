@@ -297,35 +297,38 @@ def _page(title: str, body: str) -> str:
 def landing(payment_link: str | None, free_signup: bool) -> str:
     if payment_link:
         cta = f'<a class="btn" href="{escape(payment_link)}">Get your catalog</a>'
+        ghost = '<a class="link-ghost" href="#self-host">Or self-host it &darr;</a>'
         note = ""
     elif free_signup:
         cta = '<a class="btn" href="/start">Get your catalog</a>'
+        ghost = '<a class="link-ghost" href="#self-host">Or self-host it &darr;</a>'
         note = ""
     else:
-        cta = ""
+        # No hosted instance yet — self-hosting is what we offer, so it's the primary CTA.
+        cta = '<a class="btn" href="#self-host">Self-host it</a>'
+        ghost = f'<a class="link-ghost" href="{REPO_URL}">View on GitHub &rarr;</a>'
         note = (
-            '<p class="hosted-note">No hosted instance is running yet &mdash; self-host it '
-            "in a few minutes (below). A hosted option may come later.</p>"
+            '<p class="hosted-note">No hosted instance yet &mdash; run it yourself in a few '
+            "minutes. A hosted option may come later.</p>"
         )
-    ghost_label = "Or self-host it &darr;" if cta else "Self-host it &darr;"
     return _page(
         "Later.Ink — your read-later queue, on e-ink",
         f"""
 <section class="hero">
   <h1>Your read-later queue,<br>on e-ink<span class="end">.</span></h1>
   <p class="lede">Later.Ink turns your <strong>Readwise Reader</strong> library into an
-    <strong>OPDS catalog</strong> &mdash; open it in KOReader on a Kobo or Boox, or in an
-    OPDS app on your <strong>iPhone or iPad</strong>. Every item is fetched as a clean EPUB,
+    <strong>OPDS catalog</strong> &mdash; open it in KOReader on a Kobo or Boox, or in a
+    reader app like Fablum on your <strong>iPhone or iPad</strong>. Every item is fetched as a clean EPUB,
     images and all, that reads fully offline.</p>
   {note}
-  <div class="cta-row">{cta}<a class="link-ghost" href="#self-host">{ghost_label}</a></div>
+  <div class="cta-row">{cta}{ghost}</div>
 </section>
 
 <h2 class="eyebrow">Works with your reader</h2>
 <div class="targets">
-  <div class="target"><h3>iPhone &amp; iPad</h3><p>justRead, Fablum, or PocketBook</p></div>
-  <div class="target"><h3>E-ink</h3><p>KOReader on Kobo, Boox, reMarkable</p></div>
-  <div class="target"><h3>Desktop</h3><p>Calibre</p></div>
+  <div class="target"><h3>iPhone &amp; iPad</h3><p>Fablum, justRead, or PocketBook</p></div>
+  <div class="target"><h3>E-ink</h3><p>KOReader on Kobo, Boox &amp; more</p></div>
+  <div class="target"><h3>Desktop</h3><p>Thorium Reader</p></div>
   <div class="target"><h3>Android</h3><p>Moon+ Reader, KOReader</p></div>
 </div>
 <p class="small">Anything that speaks OPDS. There's no app from us to install &mdash;
@@ -342,7 +345,7 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
 <ol class="steps">
   <li>Clone <a class="inline" href="{REPO_URL}">the repository</a></li>
   <li>Put your <a class="inline" href="https://readwise.io/access_token">Readwise token</a> in a <code>.env</code> file</li>
-  <li>Run <code>docker-compose up</code> &mdash; your catalog is at <code>/opds/</code></li>
+  <li>Run <code>docker compose up</code> &mdash; your catalog is at <code>/opds/</code></li>
   <li>Add that URL to your reader and start reading</li>
 </ol>
 
