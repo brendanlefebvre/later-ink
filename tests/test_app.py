@@ -57,6 +57,20 @@ def test_health(client):
     assert resp.json()["signup"] == "free"
 
 
+def test_healthz_liveness(client):
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}  # minimal, leaks no config
+    assert client.head("/healthz").status_code == 200
+
+
+def test_version_endpoint(client):
+    resp = client.get("/version")
+    assert resp.status_code == 200
+    version = resp.json()["version"]
+    assert isinstance(version, str) and version  # non-empty release string
+
+
 def test_signup_bad_token(client):
     resp = client.post("/start", data={"readwise_token": "bad-token"})
     assert resp.status_code == 400

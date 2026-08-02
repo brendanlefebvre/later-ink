@@ -10,7 +10,7 @@ from cryptography.fernet import Fernet
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
-from . import config, opds, pages
+from . import __version__, config, opds, pages
 from .connectors import readwise
 from .connectors.base import ArticleUnavailable, Connector, UpstreamError
 from .connectors.readwise import ReadwiseConnector
@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Later.Ink",
-    version="0.2.0",
+    version=__version__,
     docs_url=None,
     redoc_url=None,
     lifespan=lifespan,
@@ -176,6 +176,21 @@ async def health():
         "self_host_connectors": list(_connectors.keys()),
         "signup": "free" if config.allow_free_signup() else "paid",
     }
+
+
+@app.api_route("/healthz", methods=["GET", "HEAD"])
+async def healthz():
+    # Liveness + shallow readiness for container/orchestrator probes: the app can
+    # serve requests once its store was built during startup. Cheap, unauthenticated,
+    # and leaks nothing (no connector names or config).
+    if getattr(app.state, "store", None) is None:
+        raise HTTPException(503, "starting up")
+    return {"status": "ok"}
+
+
+@app.get("/version")
+async def version():
+    return {"version": __version__}
 
 
 async def _check_payment(session_id: str | None) -> str | None:
