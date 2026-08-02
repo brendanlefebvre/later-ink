@@ -1,6 +1,6 @@
 [project]
 name = "read-later-opds"
-version = "0.1.0"
+dynamic = ["version"]
 description = "OPDS server that bridges read-it-later services to e-readers"
 requires-python = ">=3.11"
 license = "MIT"
@@ -25,6 +25,9 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/read_later_opds/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/read_later_opds"]
