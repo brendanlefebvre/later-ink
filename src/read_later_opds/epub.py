@@ -34,6 +34,56 @@ NORMALIZE_CSS = (
 # reliable split point. Falls back to <section>, then to a single chapter.
 _TOC_ATTR = "data-rw-epub-toc"
 
+# An in-body table of contents (Readwise and many CMSes emit one as an <ol> at
+# the top of long pieces). Its 1./2./3. numbering just duplicates the section
+# headings and reads as noise on e-ink, so we render these unnumbered. Marker
+# tokens are matched as whole words (split on space / - / _), so "notoc" and the
+# like don't trip the check.
+_TOC_TOKENS = {"toc", "doc-toc", "contents"}
+
+
+def _has_toc_marker(ol) -> bool:
+    # epub:type / role are space-separated token lists; class / id may also use
+    # - or _ as separators. Match tokens exactly rather than as substrings.
+    for attr in ("epub:type", "role"):
+        if _TOC_TOKENS.intersection((ol.get(attr) or "").lower().split()):
+            return True
+    for attr in ("class", "id"):
+        if _TOC_TOKENS.intersection(re.split(r"[\s_-]+", (ol.get(attr) or "").lower())):
+            return True
+    return False
+
+
+def _li_is_toc_entry(li) -> bool:
+    """A list item that is essentially just an in-document link (a ToC row),
+    rather than prose that happens to contain a fragment link."""
+    if not any((a.get("href") or "").startswith("#") for a in li.xpath(".//a")):
+        return False
+    # Text directly under the <li> (not inside its anchors or nested sublists);
+    # a genuine step like "First, see <a>config</a>" leaves prose here.
+    return "".join(li.xpath("./text()")).strip() == ""
+
+
+def _is_toc_list(ol) -> bool:
+    """Whether an <ol> is a table of contents rather than a genuinely enumerated list."""
+    # Explicit signals from the source: a <nav> wrapper, or a toc role/type/class/id.
+    if ol.xpath("ancestor::nav") or _has_toc_marker(ol):
+        return True
+    # Heuristic: convert only when every item is a bare in-document link — the
+    # shape of an auto-generated ToC. A numbered list with even one prose step
+    # (that merely contains a fragment link) stays ordered.
+    items = ol.xpath("./li")
+    return len(items) >= 2 and all(_li_is_toc_entry(li) for li in items)
+
+
+def _denumber_inline_tocs(doc) -> None:
+    """Rewrite in-body table-of-contents <ol>s (and their nested lists) to <ul>."""
+    for ol in doc.xpath("//ol"):
+        if _is_toc_list(ol):
+            ol.tag = "ul"
+            for sub in ol.xpath(".//ol"):
+                sub.tag = "ul"
+
 
 def _fallback_html(title: str, source_url: str | None) -> str:
     link = (
@@ -177,6 +227,8 @@ async def build_epub(
                 parent = el.getparent()
                 if parent is not None:
                     parent.remove(el)
+
+            _denumber_inline_tocs(doc)
 
             image_items = await _embed_images(doc, client)
 
