@@ -3,16 +3,19 @@
 **Your Readwise Reader queue, on your e-reader.**
 
 Later.Ink is a small server that turns your [Readwise Reader](https://readwise.io/read)
-account into an [OPDS catalog](https://opds.io/). Point KOReader (or any OPDS
-client — Calibre, Moon+ Reader, …) at one URL and browse your saved articles,
-downloading any of them as a clean EPUB, generated on the fly from the
-article HTML that Reader has already cleaned up.
+account into an [OPDS catalog](https://opds.io/). Point KOReader — or any ebook
+reader that speaks OPDS, including on iPhone and iPad (Fablum, justRead,
+PocketBook), Android (Moon+ Reader), or desktop (Thorium Reader) — at one URL
+and browse your saved articles,
+downloading any of them as a clean EPUB, generated on the fly from the article HTML
+that Reader has already cleaned up.
 
-No plugin, no app, no sync daemon — OPDS is built into KOReader.
+No plugin, no sync daemon, and nothing to install from us — ebook readers already
+speak OPDS.
 
 **Free and open source (MIT), and built to self-host** with your own Readwise
-token. Run it on a NAS, a Raspberry Pi, a VPS, or your laptop — it holds nothing
-but your own reading queue.
+token. Run it on a NAS, a Raspberry Pi, a VPS, or your laptop — it stores nothing,
+reading your queue live from Readwise.
 
 > **Scope:** later.ink is a *reading path, not a sync path*. It never writes
 > back to Readwise, so articles stay in your queue as you read them. If you want
@@ -25,12 +28,26 @@ but your own reading queue.
 
 ## Self-host quickstart
 
+**With Docker:**
+
 ```bash
 git clone https://github.com/brendanlefebvre/later-ink.git
 cd later-ink
 cp .env.example .env
 # put your token from https://readwise.io/access_token into .env
-docker-compose up -d
+docker compose up -d
+```
+
+**Without Docker** (Python 3.11+):
+
+```bash
+git clone https://github.com/brendanlefebvre/later-ink.git
+cd later-ink
+python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install .
+cp .env.example .env
+# put your token from https://readwise.io/access_token into .env
+uvicorn read_later_opds.main:app --host 0.0.0.0 --port 8000 --env-file .env
 ```
 
 Your catalog is now at `http://your-host:8000/opds/`.
@@ -40,19 +57,22 @@ the URL. Browse folders (Later, New, Shortlist, Archive, Feed), tap an article
 to download and read. Images are embedded in the EPUB, so articles read fully
 offline.
 
-**What appears:** articles, emails, PDFs, books (uploaded EPUBs), video
+**On iPhone/iPad:** use an ebook reader that supports OPDS — Fablum, justRead, or
+PocketBook — and add the same catalog URL. **On desktop:** Thorium Reader works too.
+
+**What appears:** articles, newsletters, PDFs, books (uploaded EPUBs), video
 transcripts, tweet threads, and podcasts — each delivered as an EPUB, converted
-from the content Readwise exposes. A podcast converts only after you've loaded
-its transcript in Readwise Reader (until then the API returns a stub, and the
-download reports that). Configurable via `READWISE_CATEGORIES` (e.g.
-`article,pdf`). Note: long books currently convert to a single chapter —
-TOC/chapter-splitting is planned.
+from the content Readwise exposes. Multi-section books and long articles are split
+into chapters with a navigable table of contents, and every EPUB opens on a
+generated cover. A podcast converts only after you've loaded its transcript in
+Readwise Reader (until then the API returns a stub, and the download reports
+that). Configurable via `READWISE_CATEGORIES` (e.g. `article,pdf`).
 
 ## Hosted version
 
 There's no public hosted instance running yet — self-hosting is the supported
 path today. The server does include an optional multi-tenant mode (short,
-e-ink-typeable catalog URLs like `later.ink/maple-crater-nine/`, with per-user
+e-ink-typeable catalog URLs like `later.ink/maple-crater-lantern-owl/`, with per-user
 tokens encrypted at rest), so a free hosted instance may come later. If you want
 to stand one up yourself, see the multi-tenant env vars in `.env.example`.
 
@@ -72,7 +92,7 @@ src/read_later_opds/
     readwise.py    # Readwise Reader API v3 connector
 ```
 
-More connectors (Instapaper, Wallabag, Pocket) are planned — the connector
+More connectors (Instapaper, Wallabag) are planned — the connector
 interface is three methods.
 
 ## Development
