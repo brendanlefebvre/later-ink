@@ -167,6 +167,54 @@ def test_single_user_root_flattens_to_folders(client):
         main._connectors.clear()
 
 
+def test_catalog_advertises_search(client):
+    secret, _ = _signup(client)
+    resp = client.get(f"/{secret}/")
+    assert 'rel="search"' in resp.text
+    assert f"/{secret}/search.xml" in resp.text
+
+
+def test_search_description_document(client):
+    secret, _ = _signup(client)
+    resp = client.get(f"/{secret}/search.xml")
+    assert resp.status_code == 200
+    assert "opensearchdescription" in resp.headers["content-type"]
+    assert "OpenSearchDescription" in resp.text
+    assert f"/{secret}/search?q={{searchTerms}}" in resp.text  # placeholder preserved
+
+
+def test_search_returns_matching_articles(client):
+    secret, _ = _signup(client)
+    resp = client.get(f"/{secret}/search", params={"q": "test"})
+    assert resp.status_code == 200
+    assert "kind=acquisition" in resp.headers["content-type"]
+    assert "Test Article" in resp.text
+    assert f"/{secret}/articles/42.epub" in resp.text  # downloadable result
+
+
+def test_search_no_match_returns_empty_feed(client):
+    secret, _ = _signup(client)
+    resp = client.get(f"/{secret}/search", params={"q": "nonexistent-term"})
+    assert resp.status_code == 200
+    assert "Test Article" not in resp.text
+
+
+def test_self_host_search(client):
+    main._connectors["readwise"] = ReadwiseConnector("good-token")
+    try:
+        root = client.get("/opds/")
+        assert 'rel="search"' in root.text and "/opds/readwise/search.xml" in root.text
+
+        desc = client.get("/opds/readwise/search.xml")
+        assert "{searchTerms}" in desc.text
+
+        hits = client.get("/opds/readwise/search", params={"q": "test"})
+        assert hits.status_code == 200
+        assert "Test Article" in hits.text
+    finally:
+        main._connectors.clear()
+
+
 def test_head_requests_supported_on_feeds(client):
     secret, _ = _signup(client)
     assert client.head("/opds/").status_code == 200
