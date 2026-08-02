@@ -14,6 +14,7 @@ from . import config, opds, pages
 from .connectors import readwise
 from .connectors.base import ArticleUnavailable, Connector, UpstreamError
 from .connectors.readwise import ReadwiseConnector
+from .connectors.wallabag import WallabagConnector
 from .epub import build_epub
 from .payments import verify_checkout_session
 from .ratelimit import MissLimiter
@@ -48,6 +49,9 @@ async def lifespan(app: FastAPI):
     token = config.get_readwise_token()
     if token:
         _connectors["readwise"] = ReadwiseConnector(token, config.get_readwise_categories())
+    wallabag_cfg = config.get_wallabag_config()
+    if wallabag_cfg:
+        _connectors["wallabag"] = WallabagConnector(**wallabag_cfg)
     yield
     for c in _connectors.values():
         if hasattr(c, "close"):
