@@ -174,6 +174,13 @@ def test_head_requests_supported_on_feeds(client):
     assert client.head(f"/{secret}/later/").status_code == 200
 
 
+def test_font_asset_served_and_accepts_head(client):
+    get = client.get("/assets/fonts/league-spartan.ttf")
+    assert get.status_code == 200
+    assert get.headers["content-type"] == "font/ttf"
+    assert client.head("/assets/fonts/league-spartan.ttf").status_code == 200
+
+
 def test_single_user_mode_root(client):
     resp = client.get("/opds/")
     assert resp.status_code == 200

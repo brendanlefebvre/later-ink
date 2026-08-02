@@ -139,7 +139,7 @@ async def landing():
 _FONT_PATH = os.path.join(os.path.dirname(__file__), "assets", "fonts", "LeagueSpartan-VF.ttf")
 
 
-@app.get("/assets/fonts/league-spartan.ttf")
+@app.api_route("/assets/fonts/league-spartan.ttf", methods=["GET", "HEAD"])
 async def league_spartan_font():
     # The pages' display face, served from the bundled cover font so the site
     # needs no external font CDN. Immutable + long cache; the file never changes.
