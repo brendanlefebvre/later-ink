@@ -201,7 +201,7 @@ async def build_epub(
         cover_bytes = covers.make_cover(None, title, author)
     else:
         cover_bytes = covers.make_cover(cover_src, title, author)
-    book.set_cover("cover.jpg", cover_bytes, create_page=False)
+    book.set_cover("cover.jpg", cover_bytes, create_page=True)
 
     # A single stylesheet linked from every chapter: the source's own (scoped)
     # for epub uploads, otherwise our normalized one.
@@ -241,7 +241,14 @@ async def build_epub(
     book.toc = chapters
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
-    book.spine = ["nav", *chapters]
+    # Open on the cover. Keep the nav as a readable first page only when there's
+    # real structure to navigate — a single-chapter piece doesn't need a ToC page
+    # in front of its body (the nav doc still ships for the reader's ToC menu).
+    spine: list = [("cover", True)]
+    if len(chapters) > 1:
+        spine.append("nav")
+    spine.extend(chapters)
+    book.spine = spine
 
     buf = io.BytesIO()
     epub.write_epub(buf, book)
