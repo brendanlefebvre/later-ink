@@ -187,6 +187,14 @@ ol li { margin: .45em 0; color: var(--dim); }
 .hosted-note { color: var(--muted); max-width: 34em; margin: 0 0 1.4rem; }
 .cta-row { display: flex; gap: 1.3rem; align-items: center; flex-wrap: wrap; }
 
+/* landing: demo recording — a bright "screen" playing against the dark page */
+.demo { margin: 2.8rem auto 0; max-width: 320px; }
+.demo img { width: 100%; height: auto; display: block; border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: 0 18px 50px -18px rgba(0,0,0,.85); }
+.demo figcaption { font-family: var(--spartan); text-transform: uppercase;
+  letter-spacing: .16em; font-size: .66rem; color: var(--muted); text-align: center;
+  margin-top: .85rem; }
+
 /* ---- landing: section labels + blocks ---- */
 .eyebrow {
   font-family: var(--spartan); text-transform: uppercase; letter-spacing: .22em;
@@ -323,6 +331,12 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
   {note}
   <div class="cta-row">{cta}{ghost}</div>
 </section>
+
+<figure class="demo">
+  <img src="/assets/demo.gif" width="480" height="596" loading="lazy"
+    alt="Browsing the Later.Ink catalog in KOReader, downloading a saved article, and reading it as an EPUB with images.">
+  <figcaption>Live in KOReader — browse, download, read</figcaption>
+</figure>
 
 <h2 class="eyebrow">Works with your reader</h2>
 <div class="targets">

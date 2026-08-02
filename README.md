@@ -1,6 +1,11 @@
-# Later.Ink · [later.ink](https://later.ink)
+# [Later.ink](https://later.ink)
 
 **Your Readwise Reader queue, on your e-reader.**
+
+<p align="center">
+  <img src="src/read_later_opds/assets/demo.gif" width="320"
+       alt="Browsing the Later.Ink catalog in KOReader, downloading a saved article, and reading it as an EPUB with images.">
+</p>
 
 Later.Ink is a small server that turns your [Readwise Reader](https://readwise.io/read)
 account into an [OPDS catalog](https://opds.io/). Point KOReader — or any ebook

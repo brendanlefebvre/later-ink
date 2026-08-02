@@ -136,7 +136,9 @@ async def landing():
     return pages.landing(config.get_stripe_payment_link(), config.allow_free_signup())
 
 
-_FONT_PATH = os.path.join(os.path.dirname(__file__), "assets", "fonts", "LeagueSpartan-VF.ttf")
+_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+_FONT_PATH = os.path.join(_ASSETS_DIR, "fonts", "LeagueSpartan-VF.ttf")
+_DEMO_GIF_PATH = os.path.join(_ASSETS_DIR, "demo.gif")
 
 
 @app.api_route("/assets/fonts/league-spartan.ttf", methods=["GET", "HEAD"])
@@ -147,6 +149,17 @@ async def league_spartan_font():
         _FONT_PATH,
         media_type="font/ttf",
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@app.api_route("/assets/demo.gif", methods=["GET", "HEAD"])
+async def demo_gif():
+    # The landing-page demo (KOReader: browse → download → read), bundled so the
+    # site is self-contained. Long cache; regenerating it would change the file.
+    return FileResponse(
+        _DEMO_GIF_PATH,
+        media_type="image/gif",
+        headers={"Cache-Control": "public, max-age=604800"},
     )
 
 

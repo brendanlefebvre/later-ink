@@ -181,6 +181,14 @@ def test_font_asset_served_and_accepts_head(client):
     assert client.head("/assets/fonts/league-spartan.ttf").status_code == 200
 
 
+def test_demo_gif_served(client):
+    get = client.get("/assets/demo.gif")
+    assert get.status_code == 200
+    assert get.headers["content-type"] == "image/gif"
+    assert get.content[:6] in (b"GIF87a", b"GIF89a")
+    assert client.head("/assets/demo.gif").status_code == 200
+
+
 def test_single_user_mode_root(client):
     resp = client.get("/opds/")
     assert resp.status_code == 200
