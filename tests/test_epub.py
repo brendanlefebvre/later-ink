@@ -111,6 +111,42 @@ def test_normalize_strips_original_styles_by_default():
         assert b"color:red" not in zf.read(CH0)
 
 
+def test_inline_toc_ordered_list_becomes_unordered():
+    # An in-body table of contents (anchors to page fragments) should render
+    # unnumbered so its 1./2./3. doesn't duplicate the section headings.
+    html = (
+        "<ol><li><a href='#one'>One</a></li>"
+        "<li><a href='#two'>Two</a></li>"
+        "<li><a href='#three'>Three</a></li></ol>"
+        "<h2 id='one'>One</h2><p>alpha</p>"
+    )
+    data = asyncio.run(build_epub(title="Toc", author=None, html_content=html, identifier="toc1"))
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        chapter = zf.read(CH0).decode()
+        assert "<ul" in chapter and "<ol" not in chapter  # renumbered to unordered
+        assert "#one" in chapter  # links preserved
+
+
+def test_inline_toc_detected_by_nav_and_class():
+    # <nav> wrapper and a toc class are explicit signals, even without anchors.
+    html = (
+        "<nav><ol><li>Intro</li><li>Body</li></ol></nav>"
+        "<ol class='table-of-contents'><li>A</li><li>B</li></ol>"
+        "<p>text</p>"
+    )
+    data = asyncio.run(build_epub(title="Nav", author=None, html_content=html, identifier="nav1"))
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        assert b"<ol" not in zf.read(CH0)  # both lists de-numbered
+
+
+def test_genuine_ordered_list_kept_numbered():
+    # A real enumerated list (no anchors, no toc markers) must stay an <ol>.
+    html = "<h1>Steps</h1><ol><li>First do this</li><li>Then that</li></ol>"
+    data = asyncio.run(build_epub(title="Steps", author=None, html_content=html, identifier="ord1"))
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        assert b"<ol" in zf.read(CH0)  # numbering preserved
+
+
 def test_images_embedded_and_rewritten():
     async def run():
         async with _mock_client() as client:
