@@ -95,10 +95,12 @@ src/read_later_opds/
   connectors/
     base.py        # Connector interface: folders / articles / article HTML
     readwise.py    # Readwise Reader API v3 connector
+    wallabag.py    # Wallabag API v2 connector (OAuth2)
 ```
 
-More connectors (Instapaper, Wallabag) are planned — the connector
-interface is three methods.
+Readwise and [Wallabag](https://wallabag.org/) are supported today (set the
+`WALLABAG_*` vars in `.env.example` to enable Wallabag). More connectors
+(Instapaper) are planned — the connector interface is three methods.
 
 ## Development
 
