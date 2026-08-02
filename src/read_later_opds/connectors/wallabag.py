@@ -1,10 +1,23 @@
 import asyncio
+import re
 import time
 from datetime import datetime
+from html import unescape
 
 import httpx
 
 from .base import Article, ArticleUnavailable, Connector, Folder, UpstreamError
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _summary_from_content(content: str | None) -> str | None:
+    """A short plain-text excerpt for the catalog listing, derived from the
+    entry's HTML content (Wallabag has no dedicated excerpt field)."""
+    if not content:
+        return None
+    text = " ".join(unescape(_TAG_RE.sub(" ", content)).split())
+    return text[:280] or None
 
 # Wallabag's entry list is filtered by query params, so each "folder" is just a
 # preset filter on /api/entries.
@@ -43,6 +56,7 @@ def _article_from_entry(entry: dict) -> Article:
         "id": str(entry["id"]),
         "title": entry.get("title") or "Untitled",
         "author": author,
+        "summary": _summary_from_content(entry.get("content")),
         "url": entry.get("url"),
         "language": entry.get("language"),
         "category": "article",
@@ -165,6 +179,33 @@ class WallabagConnector(Connector):
         items = (data.get("_embedded") or {}).get("items", [])
         articles = [_article_from_entry(e) for e in items]
 
+        page = data.get("page", 1)
+        pages = data.get("pages", 1)
+        next_cursor = str(page + 1) if page < pages else None
+        return articles, next_cursor
+
+    async def search(
+        self, query: str, cursor: str | None = None
+    ) -> tuple[list[Article], str | None]:
+        """Use Wallabag's native full-text search endpoint (searches content,
+        not just the fields we cache). Falls back to the base client-side scan
+        on older Wallabag instances that lack /api/search."""
+        term = query.strip()
+        if not term:
+            return [], None
+
+        params = {"term": term, "perPage": str(PER_PAGE)}
+        if cursor:
+            params["page"] = cursor
+        try:
+            data = await self._get("/api/search.json", params)
+        except UpstreamError as e:
+            if e.status == 404:
+                return await super().search(query, cursor)
+            raise
+
+        items = (data.get("_embedded") or {}).get("items", [])
+        articles = [_article_from_entry(e) for e in items]
         page = data.get("page", 1)
         pages = data.get("pages", 1)
         next_cursor = str(page + 1) if page < pages else None

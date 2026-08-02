@@ -82,6 +82,7 @@ def test_auth_then_list_articles():
     assert articles[0].author == "Ann, Bob"  # published_by joined
     assert articles[0].image_url == "https://example.com/img.png"
     assert articles[0].category == "article"
+    assert articles[0].summary == "hello"  # excerpt derived from content
     assert cursor == "2"  # page 1 of 2 -> next page
 
     token_reqs = [r for r in reqs if r.url.path == "/oauth/v2/token"]
@@ -160,6 +161,52 @@ def test_401_triggers_reauth_and_retry():
     articles, _ = _run(conn, lambda: conn.list_articles("all"))
     assert [a.id for a in articles] == ["7", "8"]  # recovered after re-auth
     assert state["entries"] == 2  # retried once
+
+
+def test_search_uses_native_endpoint():
+    reqs: list = []
+
+    def h(request):
+        reqs.append(request)
+        if request.url.path == "/oauth/v2/token":
+            return httpx.Response(200, json={"access_token": "AT", "expires_in": 3600})
+        if request.url.path == "/api/search.json":
+            return httpx.Response(200, json=ENTRIES_PAGE)
+        return httpx.Response(404, json={})
+
+    conn = _make_conn(h)
+    articles, cursor = _run(conn, lambda: conn.search("rust"))
+
+    assert [a.id for a in articles] == ["7", "8"]
+    assert cursor == "2"
+    search_reqs = [r for r in reqs if r.url.path == "/api/search.json"]
+    assert search_reqs and search_reqs[0].url.params["term"] == "rust"  # native term search
+    # never scanned folders when native search is available
+    assert not any(r.url.path == "/api/entries.json" for r in reqs)
+
+
+def test_search_falls_back_to_scan_when_endpoint_missing():
+    # Older Wallabag without /api/search: the connector should fall back to the
+    # inherited client-side scan over folders.
+    def h(request):
+        if request.url.path == "/oauth/v2/token":
+            return httpx.Response(200, json={"access_token": "AT", "expires_in": 3600})
+        if request.url.path == "/api/search.json":
+            return httpx.Response(404, json={})
+        if request.url.path == "/api/entries.json":
+            return httpx.Response(200, json=ENTRIES_PAGE)
+        return httpx.Response(404, json={})
+
+    conn = _make_conn(h)
+    # "rust" matches item 7's title; the base scan filters on title/author/summary.
+    articles, _ = _run(conn, lambda: conn.search("rust"))
+    assert "7" in {a.id for a in articles}
+
+
+def test_search_blank_query_returns_nothing():
+    conn = _make_conn(_handler([]))
+    articles, cursor = _run(conn, lambda: conn.search("   "))
+    assert articles == [] and cursor is None
 
 
 def test_config_requires_all_fields(monkeypatch):
