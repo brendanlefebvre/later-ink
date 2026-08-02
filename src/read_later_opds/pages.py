@@ -31,10 +31,31 @@ _STYLE = """
   --accent:      #d8b880;
   --accent-soft: #c9a875;
   --danger:      #e6675f;
+  --shadow: rgba(0,0,0,.8);
+  --glow: rgba(216,184,128,.10);
   --col: 44em;
   --spartan: "League Spartan", "Arial Narrow", sans-serif;
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+/* Light theme = "e-ink day mode": near-black text on light gray. The amber button
+   stays; --accent-soft deepens to bronze so it's legible on light, and the frontlight
+   glow is dropped. Comes from the OS setting unless the toggle forces dark, or is
+   forced on by the toggle. (Both selectors carry the same tokens by design.) */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --desk:#e6e7ea; --bg:#f5f6f7; --surface:#eceef1; --line:#d7dade;
+    --text:#17191d; --dim:#3d434b; --muted:#5f6570; --faint:#9aa0aa;
+    --accent-soft:#8a6a2f; --danger:#c0392b;
+    --shadow: rgba(20,24,31,.14); --glow: transparent;
+  }
+}
+:root[data-theme="light"] {
+  --desk:#e6e7ea; --bg:#f5f6f7; --surface:#eceef1; --line:#d7dade;
+  --text:#17191d; --dim:#3d434b; --muted:#5f6570; --faint:#9aa0aa;
+  --accent-soft:#8a6a2f; --danger:#c0392b;
+  --shadow: rgba(20,24,31,.14); --glow: transparent;
 }
 
 * { box-sizing: border-box; }
@@ -50,7 +71,7 @@ html, body { background: var(--desk); margin: 0; }
   flex-direction: column;
   border-left: 1px solid var(--line);
   border-right: 1px solid var(--line);
-  box-shadow: 0 0 80px -20px rgba(0,0,0,.8);
+  box-shadow: 0 0 80px -20px var(--shadow);
   font-family: var(--serif);
   font-size: 18px;
   line-height: 1.65;
@@ -75,6 +96,20 @@ html, body { background: var(--desk); margin: 0; }
 .status { display: flex; align-items: center; gap: .8rem; }
 .wifi { display: block; color: var(--muted); }
 .clock { font-variant-numeric: tabular-nums; }
+.theme-toggle { -webkit-appearance: none; appearance: none; background: none; border: 0;
+  padding: 0; margin: 0; cursor: pointer; color: var(--muted); line-height: 0;
+  display: inline-flex; align-items: center; }
+.theme-toggle:hover { color: var(--text); }
+.theme-toggle svg { display: block; }
+/* the icon shows the ACTIVE theme: moon in dark, sun in light */
+.theme-toggle .sun { display: none; }
+.theme-toggle .moon { display: block; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .theme-toggle .moon { display: none; }
+  :root:not([data-theme="dark"]) .theme-toggle .sun { display: block; }
+}
+:root[data-theme="light"] .theme-toggle .moon { display: none; }
+:root[data-theme="light"] .theme-toggle .sun { display: block; }
 .battery { display: inline-flex; align-items: center; gap: 4px; }
 .battery .cell {
   width: 22px; height: 11px; border: 1px solid var(--muted);
@@ -102,7 +137,7 @@ html, body { background: var(--desk); margin: 0; }
 .screen { flex: 1; padding: 0 1.6rem 2.4rem; position: relative; }
 .screen::before {
   content: ""; position: absolute; inset: 0 0 auto 0; height: 420px;
-  background: radial-gradient(120% 80% at 50% -10%, rgba(216,184,128,.10), transparent 60%);
+  background: radial-gradient(120% 80% at 50% -10%, var(--glow), transparent 60%);
   pointer-events: none;
 }
 
@@ -123,7 +158,7 @@ p.small { color: var(--dim); }
 
 a { color: var(--accent-soft); text-decoration: underline; text-underline-offset: 2px; }
 a:hover { color: var(--accent); }
-a.inline { text-decoration: none; border-bottom: 1px solid rgba(201,168,117,.35); }
+a.inline { text-decoration: none; border-bottom: 1px solid var(--accent-soft); }
 a.inline:hover { border-color: var(--accent-soft); }
 
 code, .url {
@@ -181,7 +216,7 @@ ol li { margin: .45em 0; color: var(--dim); }
   line-height: .98; letter-spacing: -.015em;
   margin: 0 0 1.2rem; text-wrap: balance;
 }
-.hero h1 .end { color: var(--accent); }
+.hero h1 .end { color: var(--accent-soft); }
 .lede { font-size: 1.2rem; line-height: 1.6; color: var(--dim); margin: 0 0 2rem; max-width: 33em; }
 .lede strong { color: var(--text); font-weight: 600; }
 .hosted-note { color: var(--muted); max-width: 34em; margin: 0 0 1.4rem; }
@@ -190,7 +225,7 @@ ol li { margin: .45em 0; color: var(--dim); }
 /* landing: demo recording — a bright "screen" playing against the dark page */
 .demo { margin: 2.8rem auto 0; max-width: 320px; }
 .demo img { width: 100%; height: auto; display: block; border: 1px solid var(--line);
-  border-radius: 10px; box-shadow: 0 18px 50px -18px rgba(0,0,0,.85); }
+  border-radius: 10px; box-shadow: 0 18px 50px -18px var(--shadow); }
 .demo figcaption { font-family: var(--spartan); text-transform: uppercase;
   letter-spacing: .16em; font-size: .66rem; color: var(--muted); text-align: center;
   margin-top: .85rem; }
@@ -238,7 +273,8 @@ details[open] summary::after { content: "–"; }
 details .answer { padding: 0 0 1rem; color: var(--dim); font-size: 1.02rem; }
 
 /* ---- focus + motion ---- */
-a:focus-visible, .btn:focus-visible, summary:focus-visible, input:focus-visible {
+a:focus-visible, .btn:focus-visible, summary:focus-visible, input:focus-visible,
+.theme-toggle:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px;
 }
 @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
@@ -265,7 +301,31 @@ _STATUSBAR = (
     '3.1L6.7 15.2C8.1 13.8 9.9 13 12 13s3.9.8 5.3 2.2l2.1-2.1C17.5 11.2 14.9 10 12 10z"/></svg>'
     '<span class="battery"><span class="cell"><span class="fill"></span></span></span>'
     '<span class="clock" id="ll-clock"></span>'
+    '<button class="theme-toggle" type="button" aria-label="Switch between light and dark">'
+    '<svg class="moon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" '
+    'aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
+    '<svg class="sun" viewBox="0 0 24 24" width="15" height="15" fill="none" '
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">'
+    '<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.4 4.4l1.6 1.6'
+    'M18 18l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.4 19.6l1.6-1.6M18 6l1.6-1.6"/></svg>'
+    "</button>"
     "</span></header>"
+)
+
+# Applied in <head> before first paint so a saved override doesn't flash the wrong theme.
+_THEME_HEAD_SCRIPT = (
+    "<script>try{var t=localStorage.getItem('ll-theme');"
+    "if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>"
+)
+
+# Toggle: flip the effective theme and remember it (overrides the OS setting).
+_THEME_TOGGLE_SCRIPT = (
+    "<script>(function(){var r=document.documentElement,"
+    "b=document.querySelector('.theme-toggle');if(!b)return;"
+    "b.addEventListener('click',function(){var c=r.getAttribute('data-theme');"
+    "if(!c)c=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';"
+    "var n=c==='dark'?'light':'dark';r.setAttribute('data-theme',n);"
+    "try{localStorage.setItem('ll-theme',n)}catch(e){}});}());</script>"
 )
 
 # The status-bar clock mirrors the viewer's own device time (like a real e-reader),
@@ -293,11 +353,12 @@ def _page(title: str, body: str) -> str:
         '<meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{escape(title)}</title><style>{_STYLE}</style>"
+        f"{_THEME_HEAD_SCRIPT}"
         "</head><body>"
         f'<div class="device">{_STATUSBAR}'
         f'<main class="screen">{body}</main>'
         f"{_FOOTERBAR}</div>"
-        f"{_CLOCK_SCRIPT}"
+        f"{_CLOCK_SCRIPT}{_THEME_TOGGLE_SCRIPT}"
         "</body></html>"
     )
 
