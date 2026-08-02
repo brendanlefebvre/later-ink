@@ -13,6 +13,8 @@ NSMAP = {None: ATOM_NS, "opds": OPDS_NS, "dc": DC_NS}
 NAV_TYPE = "application/atom+xml;profile=opds-catalog;kind=navigation"
 ACQ_TYPE = "application/atom+xml;profile=opds-catalog;kind=acquisition"
 EPUB_TYPE = "application/epub+zip"
+OPENSEARCH_NS = "http://a9.com/-/spec/opensearch/1.1/"
+OPENSEARCH_TYPE = "application/opensearchdescription+xml"
 
 
 def _now_iso() -> str:
@@ -74,14 +76,32 @@ def root_catalog(connectors: list[tuple[str, str]], base: str = "/opds") -> byte
     return _serialize(feed)
 
 
+def search_description(search_template: str) -> bytes:
+    """OpenSearch description document.
+
+    `search_template` must contain the OpenSearch {searchTerms} placeholder;
+    the client substitutes the user's query and requests the resulting URL.
+    """
+    root = etree.Element(f"{{{OPENSEARCH_NS}}}OpenSearchDescription", nsmap={None: OPENSEARCH_NS})
+    _add_text(root, "ShortName", "Later.Ink")
+    _add_text(root, "Description", "Search your saved articles")
+    url = etree.SubElement(root, "Url")
+    url.set("type", ACQ_TYPE)
+    url.set("template", search_template)
+    return _serialize(root)
+
+
 def folder_catalog(
     feed_id: str,
     title: str,
     folders: list[Folder],
     base: str,
     start_href: str,
+    search_href: str | None = None,
 ) -> bytes:
     feed = _make_feed(feed_id, title, f"{base}/", start_href)
+    if search_href:
+        _add_link(feed, "search", search_href, OPENSEARCH_TYPE)
 
     for folder in folders:
         entry = etree.SubElement(feed, "entry")
@@ -109,7 +129,8 @@ def article_feed(
     feed = _make_feed(feed_id, title, self_href, start_href, ACQ_TYPE)
 
     if next_cursor:
-        _add_link(feed, "next", f"{self_href}?cursor={next_cursor}", ACQ_TYPE)
+        sep = "&" if "?" in self_href else "?"
+        _add_link(feed, "next", f"{self_href}{sep}cursor={next_cursor}", ACQ_TYPE)
 
     for article in articles:
         entry = etree.SubElement(feed, "entry")
