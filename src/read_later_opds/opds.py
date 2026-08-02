@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from lxml import etree
 
@@ -130,7 +131,9 @@ def article_feed(
 
     if next_cursor:
         sep = "&" if "?" in self_href else "?"
-        _add_link(feed, "next", f"{self_href}{sep}cursor={next_cursor}", ACQ_TYPE)
+        # Encode the cursor as a single value so its contents can't inject
+        # additional query parameters into the next link.
+        _add_link(feed, "next", f"{self_href}{sep}cursor={quote(next_cursor, safe='')}", ACQ_TYPE)
 
     for article in articles:
         entry = etree.SubElement(feed, "entry")

@@ -89,6 +89,8 @@ class Connector(ABC):
             while scanned < SEARCH_SCAN_LIMIT:
                 articles, page = await self.list_articles(folder.id, page)
                 for a in articles:
+                    if scanned >= SEARCH_SCAN_LIMIT:
+                        break  # stop mid-page so a huge page can't blow the cap
                     scanned += 1
                     if a.id in seen:
                         continue
@@ -96,7 +98,7 @@ class Connector(ABC):
                     if needle in haystack:
                         seen.add(a.id)
                         matches.append(a)
-                if not page:
+                if not page or scanned >= SEARCH_SCAN_LIMIT:
                     break
             if scanned >= SEARCH_SCAN_LIMIT:
                 break

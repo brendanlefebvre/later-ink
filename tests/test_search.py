@@ -1,6 +1,11 @@
 import asyncio
 
-from read_later_opds.connectors.base import Article, Connector, Folder
+from read_later_opds.connectors.base import (
+    SEARCH_SCAN_LIMIT,
+    Article,
+    Connector,
+    Folder,
+)
 
 
 class FakeConnector(Connector):
@@ -51,3 +56,13 @@ def test_search_dedupes_articles_seen_in_multiple_folders():
     c = FakeConnector([Folder("a", "A"), Folder("b", "B")], {"a": [dup], "b": [dup]})
     res, _ = asyncio.run(c.search("rust"))
     assert len(res) == 1
+
+
+def test_search_stops_at_scan_limit_within_a_single_page():
+    # A single oversized page must not be scanned past the cap: only the first
+    # SEARCH_SCAN_LIMIT items are considered, even though every item matches.
+    oversized = [Article(id=str(i), title=f"rust {i}") for i in range(SEARCH_SCAN_LIMIT + 50)]
+    c = FakeConnector([Folder("a", "A")], {"a": oversized})
+    res, cursor = asyncio.run(c.search("rust"))
+    assert len(res) == SEARCH_SCAN_LIMIT  # items beyond the cap were never processed
+    assert cursor is None
