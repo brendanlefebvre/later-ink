@@ -52,7 +52,7 @@ python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install .
 cp .env.example .env
 # put your token from https://readwise.io/access_token into .env
-uvicorn read_later_opds.main:app --host 0.0.0.0 --port 8000 --env-file .env
+python -m uvicorn read_later_opds.main:app --host 0.0.0.0 --port 8000 --env-file .env
 ```
 
 Your catalog is now at `http://your-host:8000/opds/`.
@@ -108,7 +108,7 @@ Readwise and [Wallabag](https://wallabag.org/) are supported today (set the
 
 ```bash
 pip install -e ".[dev]"
-ALLOW_FREE_SIGNUP=1 uvicorn read_later_opds.main:app --reload
+ALLOW_FREE_SIGNUP=1 python -m uvicorn read_later_opds.main:app --reload
 pytest
 ```
 
