@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import logging
 import os
+import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from urllib.parse import quote
@@ -137,9 +138,38 @@ async def article_unavailable_handler(request: Request, exc: ArticleUnavailable)
 # ---------------------------------------------------------------- pages
 
 
+def _record_landing_hit(request: Request) -> None:
+    # Opt-in referrer log (only when STATS_TOKEN is set). Never let analytics
+    # break the page — swallow any error. No IP is stored (see store.record_hit).
+    if not config.get_stats_token():
+        return
+    ref = request.headers.get("referer")
+    ua = request.headers.get("user-agent")
+    try:
+        app.state.store.record_hit("/", ref[:500] if ref else None, ua[:300] if ua else None)
+    except Exception:
+        logger.debug("referrer-log write failed", exc_info=True)
+
+
 @app.get("/", response_class=HTMLResponse)
-async def landing():
+async def landing(request: Request):
+    _record_landing_hit(request)
     return pages.landing(config.get_stripe_payment_link(), config.allow_free_signup())
+
+
+@app.get("/stats", response_class=HTMLResponse)
+async def stats(token: str = Query(default="")):
+    expected = config.get_stats_token()
+    if not expected or not hmac.compare_digest(token, expected):
+        raise HTTPException(404)  # 404, not 403 — don't confirm the endpoint exists
+    store: Store = app.state.store
+    since = time.time() - 30 * 86400
+    return pages.stats_page(
+        total=store.hit_count(),
+        total_30d=store.hit_count(since),
+        referrers=store.top_referrers(since),
+        recent=store.recent_hits(50),
+    )
 
 
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")

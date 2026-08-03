@@ -38,6 +38,13 @@ def trust_proxy_headers() -> bool:
     return os.environ.get("TRUST_PROXY_HEADERS", "").lower() in ("1", "true", "yes")
 
 
+def get_stats_token() -> str | None:
+    """When set, the landing page records a server-side referrer log (no IPs or
+    cookies) and `/stats?token=<STATS_TOKEN>` shows it. Unset (default) = off, so
+    self-hosters collect nothing unless they opt in."""
+    return os.environ.get("STATS_TOKEN") or None
+
+
 def get_wallabag_config() -> dict[str, str] | None:
     """Self-host Wallabag connector settings, or None if not fully configured.
 

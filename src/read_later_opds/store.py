@@ -11,8 +11,8 @@ from .words import WORDS
 logger = logging.getLogger(__name__)
 
 RESERVED_PATHS = {
-    "opds", "start", "health", "static", "assets", "docs", "openapi.json",
-    "favicon.ico", "robots.txt",
+    "opds", "start", "health", "healthz", "version", "stats", "static", "assets",
+    "docs", "openapi.json", "favicon.ico", "robots.txt",
 }
 
 # Four words ≈ 35 bits over the 419-word list — guessable-any-user math stops
@@ -59,6 +59,18 @@ class Store:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS misses_ip_ts ON misses (ip, ts)")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hits (
+                    id INTEGER PRIMARY KEY,
+                    ts REAL NOT NULL,
+                    path TEXT,
+                    referer TEXT,
+                    user_agent TEXT
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS hits_ts ON hits (ts)")
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -144,3 +156,39 @@ class Store:
                 (ip, time.time() - window),
             ).fetchone()
         return row["n"]
+
+    # ------------------------------------------------- landing referrer log
+    # Opt-in (only when STATS_TOKEN is set): a server-side log to attribute a
+    # launch to its source. Referer + user-agent + timestamp only — no IPs, no
+    # cookies. Durable on the SQLite volume, so it survives scale-to-zero.
+
+    def record_hit(self, path: str, referer: str | None, user_agent: str | None) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO hits (ts, path, referer, user_agent) VALUES (?, ?, ?, ?)",
+                (time.time(), path, referer, user_agent),
+            )
+
+    def hit_count(self, since: float = 0.0) -> int:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM hits WHERE ts >= ?", (since,)
+            ).fetchone()
+        return row["n"]
+
+    def top_referrers(self, since: float = 0.0, limit: int = 100) -> list[tuple[str, int]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT COALESCE(NULLIF(referer, ''), '(direct)') AS ref, COUNT(*) AS n "
+                "FROM hits WHERE ts >= ? GROUP BY ref ORDER BY n DESC LIMIT ?",
+                (since, limit),
+            ).fetchall()
+        return [(r["ref"], r["n"]) for r in rows]
+
+    def recent_hits(self, limit: int = 50) -> list[tuple[float, str, str, str]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT ts, path, referer, user_agent FROM hits ORDER BY ts DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [(r["ts"], r["path"], r["referer"], r["user_agent"]) for r in rows]

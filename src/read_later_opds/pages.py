@@ -7,6 +7,7 @@ type is League Spartan (served from /assets, the same face used on EPUB covers);
 body copy is set in a system serif to reinforce that this is about reading.
 """
 
+import time
 from html import escape
 
 REPO_URL = "https://github.com/brendanlefebvre/later-ink"
@@ -512,4 +513,45 @@ def deleted() -> str:
 <h1>All gone</h1>
 <p class="small">Your catalog and stored Readwise token have been deleted.</p>
 """,
+    )
+
+
+def _fmt_ts(ts: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.gmtime(ts))
+
+
+# Minimal standalone admin page — not the themed device chrome; token-gated in main.
+_STATS_STYLE = (
+    "body{font-family:system-ui,sans-serif;max-width:52em;margin:2.5em auto;padding:0 1em;"
+    "color:#1a1a1a;line-height:1.5}h1{font-size:1.3em}h2{font-size:1em;margin-top:1.8em}"
+    "table{border-collapse:collapse;width:100%;margin:.6em 0}th,td{text-align:left;"
+    "padding:.35em .6em;border-bottom:1px solid #eee;font-size:.92em;vertical-align:top}"
+    "td.n{font-variant-numeric:tabular-nums;font-weight:600;width:4em}"
+    ".muted{color:#888}.ua{color:#999;font-size:.82em;word-break:break-all}"
+    "td.ref{word-break:break-all}"
+)
+
+
+def stats_page(total: int, total_30d: int, referrers, recent) -> str:
+    ref_rows = "".join(
+        f'<tr><td class="n">{n}</td><td class="ref">{escape(ref)}</td></tr>'
+        for ref, n in referrers
+    ) or '<tr><td colspan="2" class="muted">No hits yet.</td></tr>'
+    recent_rows = "".join(
+        f"<tr><td>{escape(_fmt_ts(ts))}</td>"
+        f'<td class="ref">{escape(ref or "(direct)")}</td>'
+        f'<td class="ua">{escape((ua or "")[:90])}</td></tr>'
+        for ts, _path, ref, ua in recent
+    ) or '<tr><td colspan="3" class="muted">—</td></tr>'
+    return (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>Later.Ink — traffic</title><style>{_STATS_STYLE}</style></head><body>"
+        "<h1>Later.Ink traffic</h1>"
+        f"<p><strong>{total}</strong> total hits · <strong>{total_30d}</strong> in the "
+        "last 30 days. (Landing-page views only; referer + user-agent, no IPs.)</p>"
+        f"<h2>Top referrers · last 30 days</h2><table>{ref_rows}</table>"
+        f"<h2>Recent hits</h2><table>"
+        "<tr><th>When (UTC)</th><th>Referrer</th><th>User-agent</th></tr>"
+        f"{recent_rows}</table></body></html>"
     )
