@@ -43,7 +43,21 @@ reading your queue live from Readwise.
 > rename, so a re-downloaded article registers as a new book in your
 > reader's library rather than an update to the old copy.
 
-**With Docker:**
+**Prebuilt image** (fastest — no checkout; amd64 & arm64, Pi included):
+
+```bash
+docker run -d --name later-ink -p 8000:8000 \
+  -e READWISE_TOKEN=your_token_from_readwise.io/access_token \
+  -e DATABASE_PATH=/data/app.db -v later-ink-data:/data \
+  --restart unless-stopped \
+  ghcr.io/brendanlefebvre/later-ink:latest
+```
+
+(Or pin a version tag, e.g. `:0.4.1`. Add `-e WALLABAG_*=...` vars
+to serve Wallabag too — see [.env.example](.env.example) for the full list.
+The same image drops straight into a Compose file or Portainer stack.)
+
+**With Docker Compose, from source:**
 
 ```bash
 git clone https://github.com/brendanlefebvre/later-ink.git
@@ -54,6 +68,13 @@ docker compose up -d
 ```
 
 **Without Docker** (Python 3.11+):
+
+```bash
+pip install later-ink
+READWISE_TOKEN=your_token python -m uvicorn later_ink.main:app --host 0.0.0.0 --port 8000
+```
+
+Or from a source checkout:
 
 ```bash
 git clone https://github.com/brendanlefebvre/later-ink.git
