@@ -53,19 +53,28 @@ def test_landing(client):
     assert "mailto:hello@later.ink" in resp.text
 
 
-def test_landing_social_preview_tags(client):
+def test_landing_social_preview_tags(client, monkeypatch):
+    # Pin BASE_URL so the test doesn't inherit one from the developer's shell.
+    monkeypatch.setenv("BASE_URL", "https://cards.example.com")
     resp = client.get("/")
     # og:image/og:url must be absolute: unfurlers silently drop relative paths.
-    assert '<meta property="og:image" content="http://localhost:8000/assets/og.png">' in resp.text
-    assert '<meta property="og:url" content="http://localhost:8000/">' in resp.text
+    assert '<meta property="og:image" content="https://cards.example.com/assets/og.png">' in resp.text
+    assert '<meta property="og:url" content="https://cards.example.com/">' in resp.text
     assert '<meta property="og:title"' in resp.text
+    assert '<meta property="og:description"' in resp.text
+    assert '<meta property="og:image:width" content="1200">' in resp.text
+    assert '<meta property="og:image:height" content="630">' in resp.text
+    assert '<meta property="og:image:alt"' in resp.text
     assert '<meta name="twitter:card" content="summary_large_image">' in resp.text
+    assert '<meta name="description"' in resp.text
 
 
 def test_social_preview_tags_only_on_landing(client):
     resp = client.get("/start")
     assert resp.status_code == 200
     assert 'property="og:' not in resp.text
+    assert 'name="twitter:card"' not in resp.text
+    assert '<meta name="description"' not in resp.text
 
 
 def test_og_image_served(client):
@@ -73,7 +82,16 @@ def test_og_image_served(client):
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "image/png"
     assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"
-    assert client.head("/assets/og.png").status_code == 200
+    # The asset must match the dimensions the og:image:width/height tags claim.
+    import io
+
+    from PIL import Image
+
+    assert Image.open(io.BytesIO(resp.content)).size == (1200, 630)
+    assert resp.headers["cache-control"] == "public, max-age=604800"
+    head = client.head("/assets/og.png")
+    assert head.status_code == 200
+    assert head.headers["cache-control"] == "public, max-age=604800"
 
 
 def test_health(client):
