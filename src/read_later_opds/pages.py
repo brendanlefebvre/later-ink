@@ -365,7 +365,7 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
         ghost = f'<a class="link-ghost" href="{REPO_URL}">View on GitHub &rarr;</a>'
         note = (
             '<p class="hosted-note">No hosted instance yet &mdash; run it yourself in a few '
-            "minutes. A hosted option is coming.</p>"
+            "minutes. A hosted option may come later.</p>"
         )
     return _page(
         "Later.Ink — your read-later queue, on e-ink",
