@@ -336,7 +336,7 @@ _FOOTERBAR = (
 )
 
 
-def _page(title: str, body: str) -> str:
+def _page(title: str, body: str, head_extra: str = "") -> str:
     return (
         "<!doctype html><html lang=\"en\"><head>"
         '<meta charset="utf-8">'
@@ -345,7 +345,7 @@ def _page(title: str, body: str) -> str:
         # /{secret}/, so the wordmark and footer links would otherwise leak the
         # secret (to / and to GitHub) via the Referer header.
         '<meta name="referrer" content="no-referrer">'
-        f"<title>{escape(title)}</title><style>{_STYLE}</style>"
+        f"<title>{escape(title)}</title>{head_extra}<style>{_STYLE}</style>"
         f"{_THEME_HEAD_SCRIPT}"
         "</head><body>"
         f'<div class="device">{_STATUSBAR}'
@@ -356,7 +356,7 @@ def _page(title: str, body: str) -> str:
     )
 
 
-def landing(payment_link: str | None, free_signup: bool) -> str:
+def landing(payment_link: str | None, free_signup: bool, base_url: str) -> str:
     if payment_link:
         cta = f'<a class="btn" href="{escape(payment_link)}">Get your catalog</a>'
         ghost = '<a class="link-ghost" href="#self-host">Or self-host it &darr;</a>'
@@ -373,6 +373,27 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
             '<p class="hosted-note">No hosted instance yet. Run it yourself in a few '
             "minutes. A hosted option may come later.</p>"
         )
+    # Social preview (Open Graph) tags, landing page only: unfurlers (Discord,
+    # Slack, Mastodon...) build link cards from these. og:image/og:url must be
+    # absolute URLs or unfurlers silently skip them; the description is a
+    # static string so a card never depends on runtime state.
+    og_description = (
+        "Turn your Readwise Reader or Wallabag queue into an OPDS catalog "
+        "any e-reader can browse. Free, open source, self-hostable."
+    )
+    og_tags = (
+        '<meta property="og:title" content="Later.Ink: your read-later queue, on e-ink">'
+        f'<meta property="og:description" content="{og_description}">'
+        '<meta property="og:type" content="website">'
+        '<meta property="og:site_name" content="Later.Ink">'
+        f'<meta property="og:url" content="{escape(base_url)}/">'
+        f'<meta property="og:image" content="{escape(base_url)}/assets/og.png">'
+        '<meta property="og:image:width" content="1200">'
+        '<meta property="og:image:height" content="630">'
+        '<meta property="og:image:alt" content="Later.Ink: your read-later queue, on e-ink">'
+        '<meta name="twitter:card" content="summary_large_image">'
+        f'<meta name="description" content="{og_description}">'
+    )
     return _page(
         "Later.Ink: your read-later queue, on e-ink",
         f"""
@@ -436,6 +457,7 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
     and contributions are welcome on <a class="inline" href="{REPO_URL}">GitHub</a>.</div>
 </details>
 """,
+        head_extra=og_tags,
     )
 
 

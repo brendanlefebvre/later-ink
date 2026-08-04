@@ -164,7 +164,11 @@ async def landing(request: Request, background_tasks: BackgroundTasks):
             request.headers.get("referer"),
             ua[:300] if ua else None,
         )
-    return pages.landing(config.get_stripe_payment_link(), config.allow_free_signup())
+    return pages.landing(
+        config.get_stripe_payment_link(),
+        config.allow_free_signup(),
+        config.get_base_url(),
+    )
 
 
 @app.get("/stats", response_class=HTMLResponse)
@@ -213,6 +217,20 @@ async def demo_gif():
     return FileResponse(
         _DEMO_GIF_PATH,
         media_type="image/gif",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
+_OG_IMAGE_PATH = os.path.join(_ASSETS_DIR, "og.png")
+
+
+@app.api_route("/assets/og.png", methods=["GET", "HEAD"])
+async def og_image():
+    # Social preview card referenced by the landing page's og:image tag.
+    # Unfurlers (Discord, Slack...) fetch it server-side and cache aggressively.
+    return FileResponse(
+        _OG_IMAGE_PATH,
+        media_type="image/png",
         headers={"Cache-Control": "public, max-age=604800"},
     )
 
