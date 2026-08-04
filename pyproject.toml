@@ -4,6 +4,7 @@ dynamic = ["version"]
 description = "OPDS server that bridges read-it-later services to e-readers"
 requires-python = ">=3.11"
 license = "MIT"
+readme = "README.md"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -14,6 +15,10 @@ dependencies = [
     "cryptography>=42.0",
     "pillow>=10.0",
 ]
+
+[project.urls]
+Homepage = "https://later.ink"
+Source = "https://github.com/brendanlefebvre/later-ink"
 
 [project.optional-dependencies]
 dev = [
