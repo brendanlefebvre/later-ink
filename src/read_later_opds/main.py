@@ -361,7 +361,7 @@ async def tenant_root(secret: str, request: Request):
     return Response(
         content=opds.folder_catalog(
             _feed_id(secret),
-            "Read Later",
+            "Later.Ink",
             folders,
             base=f"/{secret}",
             start_href=f"/{secret}/",

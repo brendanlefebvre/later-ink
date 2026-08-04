@@ -83,7 +83,7 @@ def test_signup_and_browse(client):
     resp = client.get(f"/{secret}/")
     assert resp.status_code == 200
     assert "kind=navigation" in resp.headers["content-type"]
-    assert "Read Later" in resp.text
+    assert "<title>Later.Ink</title>" in resp.text
 
     resp = client.get(f"/{secret}/later/")
     assert resp.status_code == 200
