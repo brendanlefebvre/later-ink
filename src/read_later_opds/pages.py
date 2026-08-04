@@ -245,19 +245,6 @@ ol li { margin: .45em 0; color: var(--dim); }
 .target p { margin: 0; font-size: 1rem; color: var(--dim); }
 .targets + p.small { margin-top: 1.2rem; color: var(--muted); }
 
-ol.steps { list-style: none; counter-reset: step; padding: 0; margin: 0; }
-ol.steps li {
-  counter-increment: step; position: relative;
-  padding: .85rem 0 .85rem 3rem; border-bottom: 1px solid var(--line);
-  color: var(--dim); margin: 0;
-}
-ol.steps li::before {
-  content: counter(step, decimal-leading-zero);
-  position: absolute; left: 0; top: .95rem;
-  font-family: var(--spartan); font-weight: 700; font-size: .95rem;
-  letter-spacing: .04em; color: var(--faint);
-}
-
 details { border-bottom: 1px solid var(--line); padding: .3rem 0; }
 details summary {
   cursor: pointer; list-style: none; padding: .85rem 1.8rem .85rem 0;
@@ -416,13 +403,11 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
 
 <h2 class="eyebrow" id="self-host">Self-host it</h2>
 <p class="small">Free and open source (MIT). Bring your own Readwise token &mdash;
-  Later.Ink stores nothing.</p>
-<ol class="steps">
-  <li>Clone <a class="inline" href="{REPO_URL}">the repository</a></li>
-  <li>Put your <a class="inline" href="https://readwise.io/access_token">Readwise token</a> in a <code>.env</code> file</li>
-  <li>Run <code>docker compose up</code> &mdash; your catalog is at <code>/opds/</code></li>
-  <li>Add that URL to your reader and start reading</li>
-</ol>
+  Later.Ink stores nothing. Run it with Docker Compose or as a plain Python app;
+  either way it's a <code>.env</code> file and one command, then you add the
+  catalog URL to your reader. The
+  <a class="inline" href="{REPO_URL}#self-host-quickstart">README quickstart</a>
+  walks through both.</p>
 
 <h2 class="eyebrow">Questions</h2>
 <details>
