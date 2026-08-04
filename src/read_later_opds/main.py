@@ -2,12 +2,13 @@ import hashlib
 import hmac
 import logging
 import os
+import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 from cryptography.fernet import Fernet
-from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from . import __version__, config, opds, pages
@@ -99,7 +100,11 @@ def _csrf_token(secret: str) -> str:
 
 
 def _require_csrf(secret: str, token: str | None) -> None:
-    if not token or not hmac.compare_digest(_csrf_token(secret), token):
+    # Encode both sides: a non-ASCII submitted token would otherwise make
+    # hmac.compare_digest raise TypeError (500) instead of a clean 403.
+    if not token or not hmac.compare_digest(
+        _csrf_token(secret).encode("utf-8"), token.encode("utf-8")
+    ):
         raise HTTPException(403, "Invalid or missing CSRF token")
 
 
@@ -137,9 +142,52 @@ async def article_unavailable_handler(request: Request, exc: ArticleUnavailable)
 # ---------------------------------------------------------------- pages
 
 
+def _write_landing_hit(store: Store, referer: str | None, user_agent: str | None) -> None:
+    # Runs after the response is sent (BackgroundTasks): the SQLite write must
+    # never sit in the landing render path, or a Show-HN spike serializes views
+    # behind the writer. Never let analytics break anything — swallow errors.
+    try:
+        store.record_hit("/", referer, user_agent, config.get_stats_retention_days())
+    except Exception:
+        logger.debug("referrer-log write failed", exc_info=True)
+
+
 @app.get("/", response_class=HTMLResponse)
-async def landing():
+async def landing(request: Request, background_tasks: BackgroundTasks):
+    # Opt-in referrer log (only when STATS_TOKEN is set). Capture the headers
+    # now, but defer the write off the request path. No IP is stored.
+    if config.get_stats_token():
+        ua = request.headers.get("user-agent")
+        background_tasks.add_task(
+            _write_landing_hit,
+            app.state.store,
+            request.headers.get("referer"),
+            ua[:300] if ua else None,
+        )
     return pages.landing(config.get_stripe_payment_link(), config.allow_free_signup())
+
+
+@app.get("/stats", response_class=HTMLResponse)
+async def stats(token: str = Query(default="")):
+    expected = config.get_stats_token()
+    # Encode both sides: hmac.compare_digest raises TypeError on a non-ASCII
+    # str, so a non-ASCII STATS_TOKEN would 500 the endpoint instead of gating.
+    if not expected or not hmac.compare_digest(
+        token.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(404)  # 404, not 403 — don't confirm the endpoint exists
+    store: Store = app.state.store
+    since = time.time() - 30 * 86400
+    return HTMLResponse(
+        pages.stats_page(
+            total=store.hit_count(),
+            total_30d=store.hit_count(since),
+            referrers=store.top_referrers(since),
+            recent=store.recent_hits(50),
+        ),
+        # The URL carries the token; keep the response out of shared/browser caches.
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")

@@ -1,5 +1,6 @@
 import re
 import sqlite3
+import time
 
 import pytest
 from cryptography.fernet import Fernet
@@ -75,3 +76,59 @@ def test_miss_counter(store):
         store.record_miss("1.2.3.4", 3600)
     assert store.miss_count("1.2.3.4", 3600) == 5
     assert store.miss_count("5.6.7.8", 3600) == 0
+
+
+def test_conn_uses_wal(tmp_path):
+    # A separate connection sees WAL because the mode persists in the db header,
+    # so writers don't take an exclusive lock that blocks readers.
+    store = Store(str(tmp_path / "wal.db"), Fernet(Fernet.generate_key()))
+    with sqlite3.connect(store.path) as conn:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"
+
+
+def test_record_hit_strips_query_and_fragment(store):
+    store.record_hit("/", "https://ref.example/r/koreader?utm=abc#frag", "ua")
+    refs = dict(store.top_referrers())
+    assert "https://ref.example/r/koreader" in refs  # path kept for attribution
+    assert not any("utm=abc" in r or "frag" in r for r in refs)  # query/fragment gone
+
+
+@pytest.mark.parametrize(
+    "referer",
+    [
+        "http://192.168.1.5/admin?x=1",  # IPv4 literal
+        "http://[2001:db8::1]/path",  # IPv6 literal
+        "https://127.0.0.1:8000/",  # IPv4 + port
+    ],
+)
+def test_record_hit_drops_ip_literal_referer(store, referer):
+    # "No IPs" is a product claim — a referer with a bare-IP host must not persist.
+    store.record_hit("/", referer, "ua")
+    refs = dict(store.top_referrers())
+    assert refs == {"(direct)": 1}  # stored as null -> counted as direct, no address kept
+
+
+def test_record_hit_retention_prunes_old_rows(tmp_path):
+    store = Store(str(tmp_path / "hits.db"), Fernet(Fernet.generate_key()))
+    # An old hit inserted directly, then a fresh write with a 90-day window.
+    old_ts = time.time() - 200 * 86400
+    with sqlite3.connect(store.path) as conn:
+        conn.execute(
+            "INSERT INTO hits (ts, path, referer, user_agent) VALUES (?, ?, ?, ?)",
+            (old_ts, "/", "https://old.example/", "ua"),
+        )
+    store.record_hit("/", "https://new.example/", "ua", retention_days=90)
+    assert store.hit_count() == 1  # only the fresh hit survives the prune
+
+
+def test_record_hit_retention_zero_keeps_everything(tmp_path):
+    store = Store(str(tmp_path / "hits2.db"), Fernet(Fernet.generate_key()))
+    old_ts = time.time() - 200 * 86400
+    with sqlite3.connect(store.path) as conn:
+        conn.execute(
+            "INSERT INTO hits (ts, path, referer, user_agent) VALUES (?, ?, ?, ?)",
+            (old_ts, "/", "https://old.example/", "ua"),
+        )
+    store.record_hit("/", "https://new.example/", "ua", retention_days=0)
+    assert store.hit_count() == 2  # 0 = keep everything, no prune

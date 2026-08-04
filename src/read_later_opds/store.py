@@ -1,8 +1,10 @@
+import ipaddress
 import logging
 import os
 import secrets as pysecrets
 import sqlite3
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -10,9 +12,35 @@ from .words import WORDS
 
 logger = logging.getLogger(__name__)
 
+
+def _clean_referer(referer: str | None) -> str | None:
+    """Normalize a stored Referer to scheme://host/path, dropping query and
+    fragment. A referer URL can carry query-string PII from the *sending* site;
+    the path is kept because it's useful attribution (e.g. which subreddit).
+    Capped as a backstop against an oversized header."""
+    if not referer:
+        return None
+    referer = referer.strip()
+    if not referer:
+        return None
+    try:
+        parts = urlsplit(referer)
+        if parts.scheme and parts.netloc:
+            # "No IPs" is a product claim; a referer with an IP-literal host
+            # would persist an address. Drop it rather than store one.
+            try:
+                ipaddress.ip_address(parts.hostname or "")
+                return None
+            except ValueError:
+                pass
+            referer = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    except ValueError:
+        pass
+    return referer[:500]
+
 RESERVED_PATHS = {
-    "opds", "start", "health", "static", "assets", "docs", "openapi.json",
-    "favicon.ico", "robots.txt",
+    "opds", "start", "health", "healthz", "version", "stats", "static", "assets",
+    "docs", "openapi.json", "favicon.ico", "robots.txt",
 }
 
 # Four words ≈ 35 bits over the 419-word list — guessable-any-user math stops
@@ -59,10 +87,28 @@ class Store:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS misses_ip_ts ON misses (ip, ts)")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hits (
+                    id INTEGER PRIMARY KEY,
+                    ts REAL NOT NULL,
+                    path TEXT,
+                    referer TEXT,
+                    user_agent TEXT
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS hits_ts ON hits (ts)")
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
+        # WAL so a writer (rate-limit miss, referrer-log hit) doesn't take an
+        # exclusive lock that blocks readers — the landing/opds read paths must
+        # stay responsive under a traffic spike. busy_timeout keeps the rare
+        # writer-vs-writer contention from erroring out immediately.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     # ------------------------------------------------------------- users
@@ -144,3 +190,52 @@ class Store:
                 (ip, time.time() - window),
             ).fetchone()
         return row["n"]
+
+    # ------------------------------------------------- landing referrer log
+    # Opt-in (only when STATS_TOKEN is set): a server-side log to attribute a
+    # launch to its source. Referer + user-agent + timestamp only — no IPs, no
+    # cookies. Durable on the SQLite volume, so it survives scale-to-zero.
+
+    def record_hit(
+        self,
+        path: str,
+        referer: str | None,
+        user_agent: str | None,
+        retention_days: int = 0,
+    ) -> None:
+        now = time.time()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO hits (ts, path, referer, user_agent) VALUES (?, ?, ?, ?)",
+                (now, path, _clean_referer(referer), user_agent),
+            )
+            # Prune on write (like record_miss) so the log is self-limiting and
+            # the "old data goes away" claim is real, not just displayed.
+            if retention_days > 0:
+                conn.execute(
+                    "DELETE FROM hits WHERE ts < ?", (now - retention_days * 86400,)
+                )
+
+    def hit_count(self, since: float = 0.0) -> int:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM hits WHERE ts >= ?", (since,)
+            ).fetchone()
+        return row["n"]
+
+    def top_referrers(self, since: float = 0.0, limit: int = 100) -> list[tuple[str, int]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT COALESCE(NULLIF(referer, ''), '(direct)') AS ref, COUNT(*) AS n "
+                "FROM hits WHERE ts >= ? GROUP BY ref ORDER BY n DESC LIMIT ?",
+                (since, limit),
+            ).fetchall()
+        return [(r["ref"], r["n"]) for r in rows]
+
+    def recent_hits(self, limit: int = 50) -> list[tuple[float, str, str, str]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT ts, path, referer, user_agent FROM hits ORDER BY ts DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [(r["ts"], r["path"], r["referer"], r["user_agent"]) for r in rows]

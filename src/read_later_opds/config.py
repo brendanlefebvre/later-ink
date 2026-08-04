@@ -38,6 +38,29 @@ def trust_proxy_headers() -> bool:
     return os.environ.get("TRUST_PROXY_HEADERS", "").lower() in ("1", "true", "yes")
 
 
+def get_stats_token() -> str | None:
+    """When set, the landing page records a server-side referrer log (no IPs or
+    cookies) and `/stats?token=<STATS_TOKEN>` shows it. Unset (default) = off, so
+    self-hosters collect nothing unless they opt in."""
+    return os.environ.get("STATS_TOKEN") or None
+
+
+def get_stats_retention_days() -> int:
+    """How long referrer-log hits are kept before being pruned on write.
+
+    Defaults to 90 days so the log doesn't grow without bound — the privacy
+    claim is only true if old rows actually go away. Set STATS_RETENTION_DAYS=0
+    to keep everything (opt back into unbounded growth)."""
+    raw = os.environ.get("STATS_RETENTION_DAYS")
+    if raw is None:
+        return 90
+    try:
+        days = int(raw)
+    except ValueError:
+        return 90
+    return days if days >= 0 else 90
+
+
 def get_wallabag_config() -> dict[str, str] | None:
     """Self-host Wallabag connector settings, or None if not fully configured.
 
