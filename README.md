@@ -35,10 +35,13 @@ reading your queue live from Readwise.
 
 > **Upgrading from ≤0.3.x?** The internal package was renamed for the brand:
 > `read_later_opds` is now `later_ink`. Docker users just rebuild
-> (`docker compose up -d --build`). If you run without Docker, reinstall
-> (`pip install -e .`) and use the new module path:
+> (`docker compose up -d --build --remove-orphans` — the flag retires the
+> container from the old `opds` service name). If you run without Docker,
+> reinstall (`pip install -e .`) and use the new module path:
 > `python -m uvicorn later_ink.main:app ...`. Your `.env` and database are
-> untouched.
+> untouched. One cosmetic side effect: EPUB identifiers changed with the
+> rename, so a re-downloaded article registers as a new book in your
+> reader's library rather than an update to the old copy.
 
 **With Docker:**
 
