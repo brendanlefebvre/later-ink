@@ -59,8 +59,8 @@ def get_wallabag_config() -> dict[str, str] | None:
 
 
 def get_readwise_categories() -> tuple[str, ...]:
-    """Readwise categories to surface, e.g. READWISE_CATEGORIES=article,book,pdf.
-    Defaults to articles + books."""
+    """Readwise categories to surface, e.g. READWISE_CATEGORIES=article,pdf.
+    Defaults to every supported category."""
     raw = os.environ.get("READWISE_CATEGORIES")
     if not raw:
         return ("article", "email", "pdf", "epub", "video", "tweet", "podcast")

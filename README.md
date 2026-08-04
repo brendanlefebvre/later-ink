@@ -88,9 +88,12 @@ to stand one up yourself, see the multi-tenant env vars in `.env.example`.
 ```
 src/read_later_opds/
   main.py          # FastAPI routes: OPDS feeds, EPUB downloads, onboarding
+  config.py        # env-var configuration
   opds.py          # OPDS 1.x Atom feed builder
   epub.py          # HTML → EPUB (ebooklib + lxml cleanup)
+  covers.py        # generated EPUB covers (hero image + typographic fallback)
   store.py         # SQLite user store + word-based secret URLs
+  words.py         # wordlist behind the secret URLs (e-ink-typeable words)
   ratelimit.py     # per-IP throttle for unknown-secret probes
   pages.py         # server-rendered HTML pages
   payments.py      # Stripe verification (optional; inactive unless configured)
