@@ -3,7 +3,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from read_later_opds import main
+from later_ink import main
 
 
 @pytest.fixture()

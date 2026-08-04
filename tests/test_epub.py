@@ -5,7 +5,7 @@ import zipfile
 
 import httpx
 
-from read_later_opds.epub import build_epub
+from later_ink.epub import build_epub
 
 PNG_BYTES = bytes.fromhex(
     "89504e470d0a1a0a0000000d494844520000000100000001080600000"

@@ -3,7 +3,7 @@
 **Your Readwise Reader queue, on your e-reader.**
 
 <p align="center">
-  <img src="src/read_later_opds/assets/demo.gif" width="320"
+  <img src="src/later_ink/assets/demo.gif" width="320"
        alt="Browsing the Later.Ink catalog in KOReader, downloading a saved article, and reading it as an EPUB with images.">
 </p>
 
@@ -52,7 +52,7 @@ python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install .
 cp .env.example .env
 # put your token from https://readwise.io/access_token into .env
-python -m uvicorn read_later_opds.main:app --host 0.0.0.0 --port 8000 --env-file .env
+python -m uvicorn later_ink.main:app --host 0.0.0.0 --port 8000 --env-file .env
 ```
 
 Your catalog is now at `http://your-host:8000/opds/`.
@@ -86,7 +86,7 @@ to stand one up yourself, see the multi-tenant env vars in `.env.example`.
 ## Architecture
 
 ```
-src/read_later_opds/
+src/later_ink/
   main.py          # FastAPI routes: OPDS feeds, EPUB downloads, onboarding
   config.py        # env-var configuration
   opds.py          # OPDS 1.x Atom feed builder
@@ -111,7 +111,7 @@ Readwise and [Wallabag](https://wallabag.org/) are supported today (set the
 
 ```bash
 pip install -e ".[dev]"
-ALLOW_FREE_SIGNUP=1 python -m uvicorn read_later_opds.main:app --reload
+ALLOW_FREE_SIGNUP=1 python -m uvicorn later_ink.main:app --reload
 pytest
 ```
 
@@ -119,7 +119,7 @@ pytest
 
 Generated EPUB covers use [League Spartan](https://github.com/theleagueof/league-spartan)
 by The League of Moveable Type, bundled under the SIL Open Font License
-(`src/read_later_opds/assets/fonts/OFL.txt`).
+(`src/later_ink/assets/fonts/OFL.txt`).
 
 ## License
 

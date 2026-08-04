@@ -3,9 +3,9 @@ import asyncio
 import httpx
 import pytest
 
-from read_later_opds import config
-from read_later_opds.connectors.base import ArticleUnavailable
-from read_later_opds.connectors.wallabag import WallabagConnector
+from later_ink import config
+from later_ink.connectors.base import ArticleUnavailable
+from later_ink.connectors.wallabag import WallabagConnector
 
 ENTRIES_PAGE = {
     "page": 1,
