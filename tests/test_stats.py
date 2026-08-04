@@ -42,6 +42,21 @@ def test_no_ip_or_cookie_stored(stats_client):
     assert "127.0.0.1" not in page  # but no IP
 
 
+def test_landing_sets_no_referrer_policy(stats_client):
+    # Catalog pages live under /{secret}/; without this, the wordmark and footer
+    # links would leak the secret via Referer (to / and to GitHub).
+    page = stats_client.get("/").text
+    assert '<meta name="referrer" content="no-referrer">' in page
+
+
+def test_referer_query_stripped_in_stats(stats_client):
+    c = stats_client
+    c.get("/", headers={"referer": "https://news.ycombinator.com/item?id=42&utm=x"})
+    page = c.get("/stats", params={"token": "sekret"}).text
+    assert "news.ycombinator.com/item" in page  # path kept
+    assert "utm=x" not in page and "id=42" not in page  # query dropped
+
+
 def test_stats_disabled_without_token(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "app2.db"))
     monkeypatch.delenv("STATS_TOKEN", raising=False)

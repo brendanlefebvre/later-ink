@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 from cryptography.fernet import Fernet
-from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from . import __version__, config, opds, pages
@@ -138,22 +138,28 @@ async def article_unavailable_handler(request: Request, exc: ArticleUnavailable)
 # ---------------------------------------------------------------- pages
 
 
-def _record_landing_hit(request: Request) -> None:
-    # Opt-in referrer log (only when STATS_TOKEN is set). Never let analytics
-    # break the page — swallow any error. No IP is stored (see store.record_hit).
-    if not config.get_stats_token():
-        return
-    ref = request.headers.get("referer")
-    ua = request.headers.get("user-agent")
+def _write_landing_hit(store: Store, referer: str | None, user_agent: str | None) -> None:
+    # Runs after the response is sent (BackgroundTasks): the SQLite write must
+    # never sit in the landing render path, or a Show-HN spike serializes views
+    # behind the writer. Never let analytics break anything — swallow errors.
     try:
-        app.state.store.record_hit("/", ref[:500] if ref else None, ua[:300] if ua else None)
+        store.record_hit("/", referer, user_agent, config.get_stats_retention_days())
     except Exception:
         logger.debug("referrer-log write failed", exc_info=True)
 
 
 @app.get("/", response_class=HTMLResponse)
-async def landing(request: Request):
-    _record_landing_hit(request)
+async def landing(request: Request, background_tasks: BackgroundTasks):
+    # Opt-in referrer log (only when STATS_TOKEN is set). Capture the headers
+    # now, but defer the write off the request path. No IP is stored.
+    if config.get_stats_token():
+        ua = request.headers.get("user-agent")
+        background_tasks.add_task(
+            _write_landing_hit,
+            app.state.store,
+            request.headers.get("referer"),
+            ua[:300] if ua else None,
+        )
     return pages.landing(config.get_stripe_payment_link(), config.allow_free_signup())
 
 

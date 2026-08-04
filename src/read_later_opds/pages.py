@@ -353,6 +353,10 @@ def _page(title: str, body: str) -> str:
         "<!doctype html><html lang=\"en\"><head>"
         '<meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        # Never emit a Referer from any served page: catalog pages live under
+        # /{secret}/, so the wordmark and footer links would otherwise leak the
+        # secret (to / and to GitHub) via the Referer header.
+        '<meta name="referrer" content="no-referrer">'
         f"<title>{escape(title)}</title><style>{_STYLE}</style>"
         f"{_THEME_HEAD_SCRIPT}"
         "</head><body>"

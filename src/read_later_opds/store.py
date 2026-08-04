@@ -3,12 +3,32 @@ import os
 import secrets as pysecrets
 import sqlite3
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from .words import WORDS
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_referer(referer: str | None) -> str | None:
+    """Normalize a stored Referer to scheme://host/path, dropping query and
+    fragment. A referer URL can carry query-string PII from the *sending* site;
+    the path is kept because it's useful attribution (e.g. which subreddit).
+    Capped as a backstop against an oversized header."""
+    if not referer:
+        return None
+    referer = referer.strip()
+    if not referer:
+        return None
+    try:
+        parts = urlsplit(referer)
+        if parts.scheme and parts.netloc:
+            referer = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    except ValueError:
+        pass
+    return referer[:500]
 
 RESERVED_PATHS = {
     "opds", "start", "health", "healthz", "version", "stats", "static", "assets",
@@ -75,6 +95,12 @@ class Store:
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
+        # WAL so a writer (rate-limit miss, referrer-log hit) doesn't take an
+        # exclusive lock that blocks readers — the landing/opds read paths must
+        # stay responsive under a traffic spike. busy_timeout keeps the rare
+        # writer-vs-writer contention from erroring out immediately.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     # ------------------------------------------------------------- users
@@ -162,12 +188,25 @@ class Store:
     # launch to its source. Referer + user-agent + timestamp only — no IPs, no
     # cookies. Durable on the SQLite volume, so it survives scale-to-zero.
 
-    def record_hit(self, path: str, referer: str | None, user_agent: str | None) -> None:
+    def record_hit(
+        self,
+        path: str,
+        referer: str | None,
+        user_agent: str | None,
+        retention_days: int = 0,
+    ) -> None:
+        now = time.time()
         with self._conn() as conn:
             conn.execute(
                 "INSERT INTO hits (ts, path, referer, user_agent) VALUES (?, ?, ?, ?)",
-                (time.time(), path, referer, user_agent),
+                (now, path, _clean_referer(referer), user_agent),
             )
+            # Prune on write (like record_miss) so the log is self-limiting and
+            # the "old data goes away" claim is real, not just displayed.
+            if retention_days > 0:
+                conn.execute(
+                    "DELETE FROM hits WHERE ts < ?", (now - retention_days * 86400,)
+                )
 
     def hit_count(self, since: float = 0.0) -> int:
         with self._conn() as conn:
