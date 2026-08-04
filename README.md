@@ -33,6 +33,13 @@ reading your queue live from Readwise.
 
 ## Self-host quickstart
 
+> **Upgrading from ≤0.3.x?** The internal package was renamed for the brand:
+> `read_later_opds` is now `later_ink`. Docker users just rebuild
+> (`docker compose up -d --build`). If you run without Docker, reinstall
+> (`pip install -e .`) and use the new module path:
+> `python -m uvicorn later_ink.main:app ...`. Your `.env` and database are
+> untouched.
+
 **With Docker:**
 
 ```bash
