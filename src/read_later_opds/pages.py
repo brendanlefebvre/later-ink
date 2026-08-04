@@ -246,19 +246,6 @@ ol li { margin: .45em 0; color: var(--dim); }
 .target p { margin: 0; font-size: 1rem; color: var(--dim); }
 .targets + p.small { margin-top: 1.2rem; color: var(--muted); }
 
-ol.steps { list-style: none; counter-reset: step; padding: 0; margin: 0; }
-ol.steps li {
-  counter-increment: step; position: relative;
-  padding: .85rem 0 .85rem 3rem; border-bottom: 1px solid var(--line);
-  color: var(--dim); margin: 0;
-}
-ol.steps li::before {
-  content: counter(step, decimal-leading-zero);
-  position: absolute; left: 0; top: .95rem;
-  font-family: var(--spartan); font-weight: 700; font-size: .95rem;
-  letter-spacing: .04em; color: var(--faint);
-}
-
 details { border-bottom: 1px solid var(--line); padding: .3rem 0; }
 details summary {
   cursor: pointer; list-style: none; padding: .85rem 1.8rem .85rem 0;
@@ -390,10 +377,10 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
         f"""
 <section class="hero">
   <h1>Your read-later queue,<br>on e-ink<span class="end">.</span></h1>
-  <p class="lede">Later.Ink turns your <strong>Readwise Reader</strong> library into an
-    <strong>OPDS catalog</strong> &mdash; open it in KOReader on a Kobo or Boox, or in a
-    reader app like Fablum on your <strong>iPhone or iPad</strong>. Every item is fetched as a clean EPUB,
-    images and all, that reads fully offline.</p>
+  <p class="lede">Later.Ink turns your <strong>Readwise Reader</strong> or <strong>Wallabag</strong>
+    queue into a catalog your reading app already speaks (OPDS) &mdash; open it in KOReader
+    on a Kobo or Boox, or in a reader app like Fablum on your <strong>iPhone or iPad</strong>.
+    Every item is fetched as a clean EPUB, images and all, that reads fully offline.</p>
   {note}
   <div class="cta-row">{cta}{ghost}</div>
 </section>
@@ -420,32 +407,32 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
   (For a podcast, load its transcript in Readwise Reader first.)</p>
 
 <h2 class="eyebrow" id="self-host">Self-host it</h2>
-<p class="small">Free and open source (MIT). Bring your own Readwise token &mdash;
-  Later.Ink stores nothing.</p>
-<ol class="steps">
-  <li>Clone <a class="inline" href="{REPO_URL}">the repository</a></li>
-  <li>Put your <a class="inline" href="https://readwise.io/access_token">Readwise token</a> in a <code>.env</code> file</li>
-  <li>Run <code>docker compose up</code> &mdash; your catalog is at <code>/opds/</code></li>
-  <li>Add that URL to your reader and start reading</li>
-</ol>
+<p class="small">Free and open source (MIT). Bring your own Readwise or Wallabag
+  credentials &mdash; Later.Ink stores nothing. Run it with Docker Compose or as a plain Python app;
+  either way it's a <code>.env</code> file and one command, then you add the
+  catalog URL to your reader. The
+  <a class="inline" href="{REPO_URL}#self-host-quickstart">README quickstart</a>
+  walks through both.</p>
 
 <h2 class="eyebrow">Questions</h2>
 <details>
   <summary>Why OPDS?</summary>
-  <div class="answer">It's the open standard your reader already speaks. No plugin, no
-    sideloading, nothing to install beyond typing a URL.</div>
+  <div class="answer">It's the open standard e-reader apps use for browsing book catalogs
+    &mdash; the same thing Project Gutenberg or Calibre serves. Your reader treats your
+    article queue like any other bookshelf, so there's nothing to install or update.</div>
 </details>
 <details>
   <summary>Do you see my articles?</summary>
   <div class="answer">No &mdash; we keep no copy. Your articles are fetched from Readwise and
     turned into EPUBs on the fly, then streamed straight to your reader; nothing is stored on
-    the server. The only thing saved is your Readwise token, encrypted at rest and never logged.
-    Self-hosted, it never leaves your machine at all.</div>
+    the server. On the hosted version, the only thing saved is your Readwise token, encrypted
+    at rest and never logged. Self-host, and your credentials never leave your machine at all.</div>
 </details>
 <details>
   <summary>Other read-later services?</summary>
-  <div class="answer">The connector interface is three methods. Instapaper and Wallabag are
-    on the roadmap &mdash; contributions welcome on <a class="inline" href="{REPO_URL}">GitHub</a>.</div>
+  <div class="answer">Wallabag works today, alongside Readwise Reader. The connector
+    interface is three methods, so more are easy to add &mdash; Instapaper is on the roadmap,
+    and contributions are welcome on <a class="inline" href="{REPO_URL}">GitHub</a>.</div>
 </details>
 """,
     )
@@ -481,10 +468,10 @@ def success(catalog_url: str, secret: str, csrf: str) -> str:
         "Your catalog is ready",
         f"""
 <h1>Your catalog is ready</h1>
-<p class="small">Type this URL into KOReader (it's designed to be easy to type on an e-ink
-keyboard &mdash; all lowercase, no symbols except hyphens and slashes):</p>
+<p class="small">Add this URL to any OPDS reader &mdash; it's designed to be easy to type
+on an e-ink keyboard (all lowercase, no symbols except hyphens and slashes):</p>
 <span class="url-big">{escape(catalog_url)}</span>
-<h2 class="eyebrow">KOReader setup</h2>
+<h2 class="eyebrow">Example: KOReader setup</h2>
 <ol>
 <li>Open KOReader &rarr; tap the top menu &rarr; magnifying glass icon</li>
 <li>Choose <strong>OPDS catalog</strong></li>

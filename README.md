@@ -52,7 +52,7 @@ python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install .
 cp .env.example .env
 # put your token from https://readwise.io/access_token into .env
-uvicorn read_later_opds.main:app --host 0.0.0.0 --port 8000 --env-file .env
+python -m uvicorn read_later_opds.main:app --host 0.0.0.0 --port 8000 --env-file .env
 ```
 
 Your catalog is now at `http://your-host:8000/opds/`.
@@ -88,9 +88,12 @@ to stand one up yourself, see the multi-tenant env vars in `.env.example`.
 ```
 src/read_later_opds/
   main.py          # FastAPI routes: OPDS feeds, EPUB downloads, onboarding
+  config.py        # env-var configuration
   opds.py          # OPDS 1.x Atom feed builder
   epub.py          # HTML → EPUB (ebooklib + lxml cleanup)
+  covers.py        # generated EPUB covers (hero image + typographic fallback)
   store.py         # SQLite user store + word-based secret URLs
+  words.py         # wordlist behind the secret URLs (e-ink-typeable words)
   ratelimit.py     # per-IP throttle for unknown-secret probes
   pages.py         # server-rendered HTML pages
   payments.py      # Stripe verification (optional; inactive unless configured)
@@ -108,7 +111,7 @@ Readwise and [Wallabag](https://wallabag.org/) are supported today (set the
 
 ```bash
 pip install -e ".[dev]"
-ALLOW_FREE_SIGNUP=1 uvicorn read_later_opds.main:app --reload
+ALLOW_FREE_SIGNUP=1 python -m uvicorn read_later_opds.main:app --reload
 pytest
 ```
 

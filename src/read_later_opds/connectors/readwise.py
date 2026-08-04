@@ -25,7 +25,7 @@ async def validate_token(token: str) -> bool:
 
 
 LOCATIONS = [
-    Folder("later", "Read Later", "Articles saved for later"),
+    Folder("later", "Later", "Articles saved for later"),
     Folder("new", "New", "Recently added articles"),
     Folder("shortlist", "Shortlist", "Shortlisted articles"),
     Folder("archive", "Archive", "Archived articles"),
