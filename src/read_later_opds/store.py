@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 import os
 import secrets as pysecrets
@@ -25,6 +26,13 @@ def _clean_referer(referer: str | None) -> str | None:
     try:
         parts = urlsplit(referer)
         if parts.scheme and parts.netloc:
+            # "No IPs" is a product claim; a referer with an IP-literal host
+            # would persist an address. Drop it rather than store one.
+            try:
+                ipaddress.ip_address(parts.hostname or "")
+                return None
+            except ValueError:
+                pass
             referer = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
     except ValueError:
         pass

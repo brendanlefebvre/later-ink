@@ -100,7 +100,11 @@ def _csrf_token(secret: str) -> str:
 
 
 def _require_csrf(secret: str, token: str | None) -> None:
-    if not token or not hmac.compare_digest(_csrf_token(secret), token):
+    # Encode both sides: a non-ASCII submitted token would otherwise make
+    # hmac.compare_digest raise TypeError (500) instead of a clean 403.
+    if not token or not hmac.compare_digest(
+        _csrf_token(secret).encode("utf-8"), token.encode("utf-8")
+    ):
         raise HTTPException(403, "Invalid or missing CSRF token")
 
 
@@ -166,15 +170,23 @@ async def landing(request: Request, background_tasks: BackgroundTasks):
 @app.get("/stats", response_class=HTMLResponse)
 async def stats(token: str = Query(default="")):
     expected = config.get_stats_token()
-    if not expected or not hmac.compare_digest(token, expected):
+    # Encode both sides: hmac.compare_digest raises TypeError on a non-ASCII
+    # str, so a non-ASCII STATS_TOKEN would 500 the endpoint instead of gating.
+    if not expected or not hmac.compare_digest(
+        token.encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(404)  # 404, not 403 — don't confirm the endpoint exists
     store: Store = app.state.store
     since = time.time() - 30 * 86400
-    return pages.stats_page(
-        total=store.hit_count(),
-        total_30d=store.hit_count(since),
-        referrers=store.top_referrers(since),
-        recent=store.recent_hits(50),
+    return HTMLResponse(
+        pages.stats_page(
+            total=store.hit_count(),
+            total_30d=store.hit_count(since),
+            referrers=store.top_referrers(since),
+            recent=store.recent_hits(50),
+        ),
+        # The URL carries the token; keep the response out of shared/browser caches.
+        headers={"Cache-Control": "no-store"},
     )
 
 

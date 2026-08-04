@@ -94,6 +94,21 @@ def test_record_hit_strips_query_and_fragment(store):
     assert not any("utm=abc" in r or "frag" in r for r in refs)  # query/fragment gone
 
 
+@pytest.mark.parametrize(
+    "referer",
+    [
+        "http://192.168.1.5/admin?x=1",  # IPv4 literal
+        "http://[2001:db8::1]/path",  # IPv6 literal
+        "https://127.0.0.1:8000/",  # IPv4 + port
+    ],
+)
+def test_record_hit_drops_ip_literal_referer(store, referer):
+    # "No IPs" is a product claim — a referer with a bare-IP host must not persist.
+    store.record_hit("/", referer, "ua")
+    refs = dict(store.top_referrers())
+    assert refs == {"(direct)": 1}  # stored as null -> counted as direct, no address kept
+
+
 def test_record_hit_retention_prunes_old_rows(tmp_path):
     store = Store(str(tmp_path / "hits.db"), Fernet(Fernet.generate_key()))
     # An old hit inserted directly, then a fresh write with a 90-day window.

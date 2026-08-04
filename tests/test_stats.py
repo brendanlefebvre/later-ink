@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -58,10 +60,27 @@ def test_referer_query_stripped_in_stats(stats_client):
 
 
 def test_stats_disabled_without_token(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "app2.db"))
+    db = tmp_path / "app2.db"
+    monkeypatch.setenv("DATABASE_PATH", str(db))
     monkeypatch.delenv("STATS_TOKEN", raising=False)
     monkeypatch.delenv("READWISE_TOKEN", raising=False)
     with TestClient(app=main.app) as c:
         c.get("/", headers={"referer": "https://example.com"})  # not recorded
         # /stats is a 404 for any token when the feature is off
         assert c.get("/stats", params={"token": "anything"}).status_code == 404
+    # Disabled means no write happened, not just a hidden page.
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM hits").fetchone()[0] == 0
+
+
+def test_stats_non_ascii_token_gates_without_error(tmp_path, monkeypatch):
+    # A non-ASCII STATS_TOKEN must not make hmac.compare_digest raise (500);
+    # it should still gate cleanly (404 on a wrong token, 200 on the right one).
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "app3.db"))
+    monkeypatch.setenv("STATS_TOKEN", "clé-secrète-café")
+    monkeypatch.delenv("READWISE_TOKEN", raising=False)
+    with TestClient(app=main.app) as c:
+        assert c.get("/stats", params={"token": "wrong"}).status_code == 404
+        ok = c.get("/stats", params={"token": "clé-secrète-café"})
+        assert ok.status_code == 200
+        assert ok.headers.get("cache-control") == "no-store"
