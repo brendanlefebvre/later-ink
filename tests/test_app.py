@@ -23,7 +23,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(readwise, "validate_token", fake_validate)
 
     async def fake_list_folders(self):
-        return [Folder("later", "Read Later")]
+        return [Folder("later", "Later")]
 
     async def fake_list_articles(self, folder_id, cursor=None):
         return [Article(id="42", title="Test Article", author="Ann Author")], None
@@ -176,7 +176,7 @@ def test_single_user_root_flattens_to_folders(client):
         resp = client.get("/opds/")
         assert resp.status_code == 200
         assert "/opds/readwise/later/" in resp.text  # folder link, not a connector link
-        assert "Read Later" in resp.text
+        assert "<title>Later</title>" in resp.text
     finally:
         main._connectors.clear()
 
