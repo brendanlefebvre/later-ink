@@ -50,10 +50,10 @@ docker run -d --name later-ink -p 8000:8000 \
   -e READWISE_TOKEN=your_token_from_readwise.io/access_token \
   -e DATABASE_PATH=/data/app.db -v later-ink-data:/data \
   --restart unless-stopped \
-  ghcr.io/brendanlefebvre/later-ink:0.4.1
+  ghcr.io/brendanlefebvre/later-ink:latest
 ```
 
-(Pin a version tag as above, or track `:latest`. Add `-e WALLABAG_*=...` vars
+(Or pin a version tag, e.g. `:0.4.1`. Add `-e WALLABAG_*=...` vars
 to serve Wallabag too — see [.env.example](.env.example) for the full list.
 The same image drops straight into a Compose file or Portainer stack.)
 
