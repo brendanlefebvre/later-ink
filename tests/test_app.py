@@ -255,3 +255,14 @@ def test_single_user_mode_root(client):
     resp = client.get("/opds/")
     assert resp.status_code == 200
     assert "kind=navigation" in resp.headers["content-type"]
+
+
+def test_feed_ids_use_later_ink_urns(client):
+    main._connectors["readwise"] = ReadwiseConnector("good-token")
+    try:
+        resp = client.get("/opds/")
+        assert resp.status_code == 200
+        assert "urn:later-ink:" in resp.text
+        assert "read-later-opds" not in resp.text
+    finally:
+        main._connectors.clear()

@@ -125,7 +125,7 @@ def _resolve_secret(secret: str, request: Request) -> str:
 
 def _feed_id(secret: str) -> str:
     # Stable per-user feed id that doesn't echo the secret itself
-    return "urn:read-later-opds:u:" + hashlib.sha1(secret.encode()).hexdigest()[:12]
+    return "urn:later-ink:u:" + hashlib.sha1(secret.encode()).hexdigest()[:12]
 
 
 @app.exception_handler(UpstreamError)
@@ -293,7 +293,7 @@ async def _connector_folder_feed(name: str, c: Connector) -> Response:
     folders = await c.list_folders()
     return Response(
         content=opds.folder_catalog(
-            f"urn:read-later-opds:{name}",
+            f"urn:later-ink:{name}",
             c.description,
             folders,
             base=f"/opds/{name}",
@@ -345,7 +345,7 @@ async def opds_search(connector: str, q: str = Query(""), cursor: str | None = Q
         c,
         q,
         cursor,
-        feed_id=f"urn:read-later-opds:{connector}:search",
+        feed_id=f"urn:later-ink:{connector}:search",
         self_href=f"/opds/{connector}/search?q={quote(q)}",
         epub_base=f"/opds/{connector}/articles",
         start_href="/opds/",
@@ -369,7 +369,7 @@ async def opds_folder(connector: str, folder_id: str, cursor: str | None = Query
         c,
         folder_id,
         cursor,
-        feed_id=f"urn:read-later-opds:{connector}:{folder_id}",
+        feed_id=f"urn:later-ink:{connector}:{folder_id}",
         self_href=f"/opds/{connector}/{folder_id}/",
         epub_base=f"/opds/{connector}/articles",
         start_href="/opds/",
