@@ -420,8 +420,8 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
   <summary>Do you see my articles?</summary>
   <div class="answer">No &mdash; we keep no copy. Your articles are fetched from Readwise and
     turned into EPUBs on the fly, then streamed straight to your reader; nothing is stored on
-    the server. The only thing saved is your Readwise token, encrypted at rest and never logged.
-    Self-host, and your token never leaves your machine at all.</div>
+    the server. On the hosted version, the only thing saved is your Readwise token, encrypted
+    at rest and never logged. Self-host, and your credentials never leave your machine at all.</div>
 </details>
 <details>
   <summary>Other read-later services?</summary>
@@ -466,7 +466,7 @@ def success(catalog_url: str, secret: str, csrf: str) -> str:
 <p class="small">Add this URL to any OPDS reader &mdash; it's designed to be easy to type
 on an e-ink keyboard (all lowercase, no symbols except hyphens and slashes):</p>
 <span class="url-big">{escape(catalog_url)}</span>
-<h2 class="eyebrow">KOReader setup</h2>
+<h2 class="eyebrow">Example: KOReader setup</h2>
 <ol>
 <li>Open KOReader &rarr; tap the top menu &rarr; magnifying glass icon</li>
 <li>Choose <strong>OPDS catalog</strong></li>
