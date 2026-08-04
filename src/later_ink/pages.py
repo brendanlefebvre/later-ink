@@ -329,7 +329,8 @@ _FOOTERBAR = (
     '<div class="progress"><span></span></div>'
     '<div class="footmeta">'
     "<span>Later.Ink &middot; Free &amp; open source &middot; "
-    f'<a href="{REPO_URL}">GitHub</a></span>'
+    f'<a href="{REPO_URL}">GitHub</a> &middot; '
+    '<a href="mailto:hello@later.ink">Contact</a></span>'
     "<span>Page 1 of 1 &middot; 100%</span>"
     "</div></footer>"
 )

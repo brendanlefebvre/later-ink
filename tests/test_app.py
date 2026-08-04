@@ -50,6 +50,7 @@ def test_landing(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "OPDS" in resp.text
+    assert "mailto:hello@later.ink" in resp.text
 
 
 def test_health(client):
