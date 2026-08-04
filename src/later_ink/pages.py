@@ -408,11 +408,11 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
 
 <h2 class="eyebrow" id="self-host">Self-host it</h2>
 <p class="small">Free and open source (MIT). Bring your own Readwise or Wallabag
-  credentials &mdash; Later.Ink stores nothing. Run it with Docker Compose or as a plain Python app;
-  either way it's a <code>.env</code> file and one command, then you add the
-  catalog URL to your reader. The
+  credentials &mdash; Later.Ink stores nothing. Run the prebuilt Docker image,
+  <code>pip install later-ink</code>, or build from source; every path is one or
+  two commands, then you add the catalog URL to your reader. The
   <a class="inline" href="{REPO_URL}#self-host-quickstart">README quickstart</a>
-  walks through both.</p>
+  walks through each.</p>
 
 <h2 class="eyebrow">Questions</h2>
 <details>
