@@ -1,5 +1,5 @@
 services:
-  opds:
+  later-ink:
     build: .
     ports:
       - "8000:8000"
