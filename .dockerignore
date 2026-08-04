@@ -1,0 +1,28 @@
+# The Dockerfile only COPYs pyproject.toml, README.md, and src/.
+# Everything else is dead weight in the build context (uploaded to the
+# builder on every deploy) — exclude it.
+
+# Virtualenv — 118 MB; deps are reinstalled inside the image
+.venv/
+
+# VCS / tooling
+.git/
+.github/
+.gitattributes
+.gitignore
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+
+# Local runtime state & secrets (never belongs in the image)
+.env
+data/
+
+# Not needed at build time
+tests/
+docker-compose.yml
+fly.toml
+.claude/
