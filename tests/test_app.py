@@ -3,10 +3,10 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from read_later_opds import main
-from read_later_opds.connectors import readwise
-from read_later_opds.connectors.base import Article, Folder
-from read_later_opds.connectors.readwise import ReadwiseConnector
+from later_ink import main
+from later_ink.connectors import readwise
+from later_ink.connectors.base import Article, Folder
+from later_ink.connectors.readwise import ReadwiseConnector
 
 SECRET_PAT = r"([a-z]+(?:-[a-z]+){3})"
 
@@ -135,7 +135,7 @@ def test_regenerate_and_delete(client):
 
 
 def test_upstream_error_becomes_502(client):
-    from read_later_opds.connectors.base import UpstreamError
+    from later_ink.connectors.base import UpstreamError
 
     async def failing_list_articles(self, folder_id, cursor=None):
         raise UpstreamError("Readwise is rate-limiting this account", 429)
@@ -152,7 +152,7 @@ def test_upstream_error_becomes_502(client):
 
 
 def test_article_unavailable_is_readable_not_500(client):
-    from read_later_opds.connectors.base import ArticleUnavailable
+    from later_ink.connectors.base import ArticleUnavailable
 
     async def no_content(self, article_id):
         raise ArticleUnavailable("no readable article text here", status=422)
@@ -255,3 +255,14 @@ def test_single_user_mode_root(client):
     resp = client.get("/opds/")
     assert resp.status_code == 200
     assert "kind=navigation" in resp.headers["content-type"]
+
+
+def test_feed_ids_use_later_ink_urns(client):
+    main._connectors["readwise"] = ReadwiseConnector("good-token")
+    try:
+        resp = client.get("/opds/")
+        assert resp.status_code == 200
+        assert "urn:later-ink:" in resp.text
+        assert "read-later-opds" not in resp.text
+    finally:
+        main._connectors.clear()

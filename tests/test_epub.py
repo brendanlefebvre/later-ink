@@ -5,7 +5,7 @@ import zipfile
 
 import httpx
 
-from read_later_opds.epub import build_epub
+from later_ink.epub import build_epub
 
 PNG_BYTES = bytes.fromhex(
     "89504e470d0a1a0a0000000d494844520000000100000001080600000"
@@ -202,3 +202,13 @@ def test_image_fetch_failure_keeps_remote_ref():
     data = asyncio.run(run())
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert "https://example.com/gone.png" in zf.read(CH0).decode()
+
+
+def test_epub_identifier_uses_later_ink_prefix():
+    data = asyncio.run(
+        build_epub(title="Test", author="Ann", html_content="<p>Body</p>", identifier="abc123")
+    )
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        opf = zf.read("EPUB/content.opf").decode()
+        assert "later-ink-abc123" in opf
+        assert "read-later-opds" not in opf

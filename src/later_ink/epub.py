@@ -158,7 +158,7 @@ async def build_epub(
 
     if identifier is None:
         identifier = hashlib.sha256(f"{title}:{source_url or ''}".encode()).hexdigest()[:16]
-    book.set_identifier(f"read-later-opds-{identifier}")
+    book.set_identifier(f"later-ink-{identifier}")
     book.set_title(title)
     book.set_language(language or "en")
     if author:

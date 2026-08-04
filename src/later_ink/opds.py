@@ -62,11 +62,11 @@ def _serialize(feed: etree._Element) -> bytes:
 
 
 def root_catalog(connectors: list[tuple[str, str]], base: str = "/opds") -> bytes:
-    feed = _make_feed("urn:read-later-opds:root", "Later.Ink", f"{base}/", f"{base}/")
+    feed = _make_feed("urn:later-ink:root", "Later.Ink", f"{base}/", f"{base}/")
 
     for name, description in connectors:
         entry = etree.SubElement(feed, "entry")
-        _add_text(entry, "id", f"urn:read-later-opds:{name}")
+        _add_text(entry, "id", f"urn:later-ink:{name}")
         _add_text(entry, "title", description)
         _add_text(entry, "updated", _now_iso())
         content = etree.SubElement(entry, "content")

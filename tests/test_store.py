@@ -5,7 +5,7 @@ import time
 import pytest
 from cryptography.fernet import Fernet
 
-from read_later_opds.store import Store, generate_secret
+from later_ink.store import Store, generate_secret
 
 SECRET_RE = re.compile(r"^[a-z]{3,7}(-[a-z]{3,7}){3}$")
 

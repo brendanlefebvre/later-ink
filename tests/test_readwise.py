@@ -1,6 +1,6 @@
 import asyncio
 
-from read_later_opds.connectors.readwise import ReadwiseConnector
+from later_ink.connectors.readwise import ReadwiseConnector
 
 MIXED = {
     "results": [
@@ -45,7 +45,7 @@ def test_categories_configurable():
 def test_unloaded_podcast_stub_gives_load_transcript_message():
     import pytest
 
-    from read_later_opds.connectors.base import ArticleUnavailable
+    from later_ink.connectors.base import ArticleUnavailable
 
     conn = ReadwiseConnector("tok")
     stub = (

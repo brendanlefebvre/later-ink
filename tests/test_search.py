@@ -1,6 +1,6 @@
 import asyncio
 
-from read_later_opds.connectors.base import (
+from later_ink.connectors.base import (
     SEARCH_SCAN_LIMIT,
     Article,
     Connector,
