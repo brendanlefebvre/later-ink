@@ -249,7 +249,7 @@ async def _check_payment(session_id: str | None) -> str | None:
     if not stripe_key:
         return "Signups are not open yet."
     if not session_id:
-        return "Missing payment reference — please use the link from the checkout page."
+        return "Missing payment reference. Please use the link from the checkout page."
     if app.state.store.stripe_ref_used(session_id):
         return "This payment has already been used to create a catalog."
     if not await verify_checkout_session(session_id, stripe_key):
@@ -277,7 +277,7 @@ async def start_post(
     readwise_token = readwise_token.strip()
     if not readwise_token or not await readwise.validate_token(readwise_token):
         return HTMLResponse(
-            pages.start_form(session_id, "That token was rejected by Readwise — double-check it and try again."),
+            pages.start_form(session_id, "That token was rejected by Readwise. Double-check it and try again."),
             status_code=400,
         )
 

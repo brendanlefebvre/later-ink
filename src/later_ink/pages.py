@@ -370,16 +370,16 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
         cta = '<a class="btn" href="#self-host">Self-host it</a>'
         ghost = f'<a class="link-ghost" href="{REPO_URL}">View on GitHub &rarr;</a>'
         note = (
-            '<p class="hosted-note">No hosted instance yet &mdash; run it yourself in a few '
+            '<p class="hosted-note">No hosted instance yet. Run it yourself in a few '
             "minutes. A hosted option may come later.</p>"
         )
     return _page(
-        "Later.Ink — your read-later queue, on e-ink",
+        "Later.Ink: your read-later queue, on e-ink",
         f"""
 <section class="hero">
   <h1>Your read-later queue,<br>on e-ink<span class="end">.</span></h1>
   <p class="lede">Later.Ink turns your <strong>Readwise Reader</strong> or <strong>Wallabag</strong>
-    queue into a catalog your reading app already speaks (OPDS) &mdash; open it in KOReader
+    queue into a catalog your reading app already speaks (OPDS). Open it in KOReader
     on a Kobo or Boox, or in a reader app like Fablum on your <strong>iPhone or iPad</strong>.
     Every item is fetched as a clean EPUB, images and all, that reads fully offline.</p>
   {note}
@@ -389,7 +389,7 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
 <figure class="demo">
   <img src="/assets/demo.gif" width="480" height="596" loading="lazy"
     alt="Browsing the Later.Ink catalog in KOReader, downloading a saved article, and reading it as an EPUB with images.">
-  <figcaption>Live in KOReader — browse, download, read</figcaption>
+  <figcaption>Live in KOReader: browse, download, read</figcaption>
 </figure>
 
 <h2 class="eyebrow">Works with your reader</h2>
@@ -399,17 +399,17 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
   <div class="target"><h3>Desktop</h3><p>Thorium Reader</p></div>
   <div class="target"><h3>Android</h3><p>Moon+ Reader, KOReader</p></div>
 </div>
-<p class="small">Anything that speaks OPDS. There's no app from us to install &mdash;
+<p class="small">Anything that speaks OPDS. There's no app from us to install;
   you add one catalog URL and your queue is there.</p>
 
 <h2 class="eyebrow">What lands in your library</h2>
 <p class="small">Articles, newsletters, PDFs, books you've uploaded, video transcripts,
-  tweet threads, and podcasts &mdash; each delivered as an EPUB your reader can open.
+  tweet threads, and podcasts, each delivered as an EPUB your reader can open.
   (For a podcast, load its transcript in Readwise Reader first.)</p>
 
 <h2 class="eyebrow" id="self-host">Self-host it</h2>
 <p class="small">Free and open source (MIT). Bring your own Readwise or Wallabag
-  credentials &mdash; Later.Ink stores nothing. Run the prebuilt Docker image,
+  credentials; Later.Ink stores nothing. Run the prebuilt Docker image,
   <code>pip install later-ink</code>, or build from source; every path is one or
   two commands, then you add the catalog URL to your reader. The
   <a class="inline" href="{REPO_URL}#self-host-quickstart">README quickstart</a>
@@ -418,13 +418,13 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
 <h2 class="eyebrow">Questions</h2>
 <details>
   <summary>Why OPDS?</summary>
-  <div class="answer">It's the open standard e-reader apps use for browsing book catalogs
-    &mdash; the same thing Project Gutenberg or Calibre serves. Your reader treats your
+  <div class="answer">It's the open standard e-reader apps use for browsing book catalogs,
+    the same thing Project Gutenberg or Calibre serves. Your reader treats your
     article queue like any other bookshelf, so there's nothing to install or update.</div>
 </details>
 <details>
   <summary>Do you see my articles?</summary>
-  <div class="answer">No &mdash; we keep no copy. Your articles are fetched from Readwise and
+  <div class="answer">No. We keep no copy. Your articles are fetched from Readwise and
     turned into EPUBs on the fly, then streamed straight to your reader; nothing is stored on
     the server. On the hosted version, the only thing saved is your Readwise token, encrypted
     at rest and never logged. Self-host, and your credentials never leave your machine at all.</div>
@@ -432,7 +432,7 @@ def landing(payment_link: str | None, free_signup: bool) -> str:
 <details>
   <summary>Other read-later services?</summary>
   <div class="answer">Wallabag works today, alongside Readwise Reader. The connector
-    interface is three methods, so more are easy to add &mdash; Instapaper is on the roadmap,
+    interface is three methods, so more are easy to add; Instapaper is on the roadmap,
     and contributions are welcome on <a class="inline" href="{REPO_URL}">GitHub</a>.</div>
 </details>
 """,
@@ -469,7 +469,7 @@ def success(catalog_url: str, secret: str, csrf: str) -> str:
         "Your catalog is ready",
         f"""
 <h1>Your catalog is ready</h1>
-<p class="small">Add this URL to any OPDS reader &mdash; it's designed to be easy to type
+<p class="small">Add this URL to any OPDS reader; it's designed to be easy to type
 on an e-ink keyboard (all lowercase, no symbols except hyphens and slashes):</p>
 <span class="url-big">{escape(catalog_url)}</span>
 <h2 class="eyebrow">Example: KOReader setup</h2>
@@ -482,8 +482,8 @@ on an e-ink keyboard (all lowercase, no symbols except hyphens and slashes):</p>
 <p class="muted">Note: the catalog shows articles, emails, PDFs, books, video
 transcripts, tweet threads, and podcasts (load a podcast's transcript in
 Reader first).</p>
-<p class="small"><strong>Keep this URL private</strong> &mdash; anyone who has it can read
-your saved articles. Lost or leaked it? <strong>Save this page</strong> &mdash;
+<p class="small"><strong>Keep this URL private:</strong> anyone who has it can read
+your saved articles. Lost or leaked it? <strong>Save this page</strong>;
 the buttons below only work from here.</p>
 <form method="post" action="/{escape(secret)}/regenerate" style="display:inline">
 <input type="hidden" name="csrf" value="{escape(csrf)}">
@@ -534,11 +534,11 @@ def stats_page(total: int, total_30d: int, referrers, recent) -> str:
         f'<td class="ref">{escape(ref or "(direct)")}</td>'
         f'<td class="ua">{escape((ua or "")[:90])}</td></tr>'
         for ts, _path, ref, ua in recent
-    ) or '<tr><td colspan="3" class="muted">—</td></tr>'
+    ) or '<tr><td colspan="3" class="muted">No recent hits.</td></tr>'
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>Later.Ink — traffic</title><style>{_STATS_STYLE}</style></head><body>"
+        f"<title>Later.Ink traffic</title><style>{_STATS_STYLE}</style></head><body>"
         "<h1>Later.Ink traffic</h1>"
         f"<p><strong>{total}</strong> total hits · <strong>{total_30d}</strong> in the "
         "last 30 days. (Landing-page views only; referer + user-agent, no IPs.)</p>"

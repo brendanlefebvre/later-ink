@@ -169,7 +169,7 @@ class WallabagConnector(Connector):
         if resp.status_code == 401:
             raise UpstreamError("Wallabag rejected the stored credentials", 401)
         if resp.status_code == 429:
-            raise UpstreamError("Wallabag is rate-limiting — try again in a minute", 429)
+            raise UpstreamError("Wallabag is rate-limiting; try again in a minute", 429)
         if resp.status_code >= 400:
             raise UpstreamError(f"Wallabag returned an error ({resp.status_code})", resp.status_code)
         try:

@@ -89,7 +89,7 @@ class ReadwiseConnector(Connector):
             break
         if resp.status_code == 429:
             raise UpstreamError(
-                "Readwise is rate-limiting this account — try again in a minute", 429
+                "Readwise is rate-limiting this account; try again in a minute", 429
             )
         if resp.status_code == 401:
             raise UpstreamError("Readwise rejected the stored token", 401)
