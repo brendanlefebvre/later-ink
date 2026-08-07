@@ -1,4 +1,33 @@
 import os
+from pathlib import Path
+
+
+def load_env_file() -> Path | None:
+    """Populate os.environ from the first env file found, and return its path.
+
+    Checked in order: $XDG_CONFIG_HOME/later-ink/env (~/.config/later-ink/env
+    by default), then ./.env. Variables already present in the real environment
+    are never overwritten, so `READWISE_TOKEN=... python -m uvicorn ...` still
+    takes precedence over the file.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip() or str(Path.home() / ".config")
+    for path in (Path(xdg) / "later-ink" / "env", Path(".env")):
+        if not path.is_file():
+            continue
+        for raw in path.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, sep, value = line.partition("=")
+            key = key.strip()
+            if not sep or not key:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            os.environ.setdefault(key, value)
+        return path.resolve()
+    return None
 
 
 def get_readwise_token() -> str | None:

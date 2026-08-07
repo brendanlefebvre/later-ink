@@ -23,6 +23,10 @@ from .store import RESERVED_PATHS, Store
 
 logger = logging.getLogger(__name__)
 
+# Must run before anything reads config: fills os.environ from
+# ~/.config/later-ink/env (or ./.env) unless the vars are already set.
+config.load_env_file()
+
 NAV_MEDIA = "application/atom+xml;profile=opds-catalog;kind=navigation"
 ACQ_MEDIA = "application/atom+xml;profile=opds-catalog;kind=acquisition"
 OPENSEARCH_MEDIA = "application/opensearchdescription+xml"

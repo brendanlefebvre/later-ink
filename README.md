@@ -62,8 +62,8 @@ The same image drops straight into a Compose file or Portainer stack.)
 ```bash
 git clone https://github.com/brendanlefebvre/later-ink.git
 cd later-ink
-cp .env.example .env
-# put your token from https://readwise.io/access_token into .env
+mkdir -p ~/.config/later-ink && cp .env.example ~/.config/later-ink/env
+# edit that file: READWISE_TOKEN=<your token from https://readwise.io/access_token>
 docker compose up -d
 ```
 
@@ -81,10 +81,14 @@ git clone https://github.com/brendanlefebvre/later-ink.git
 cd later-ink
 python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install .
-cp .env.example .env
-# put your token from https://readwise.io/access_token into .env
-python -m uvicorn later_ink.main:app --host 0.0.0.0 --port 8000 --env-file .env
+mkdir -p ~/.config/later-ink && cp .env.example ~/.config/later-ink/env
+# edit that file: READWISE_TOKEN=<your token from https://readwise.io/access_token>
+python -m uvicorn later_ink.main:app --host 0.0.0.0 --port 8000
 ```
+
+Config is read from `$XDG_CONFIG_HOME/later-ink/env` (default
+`~/.config/later-ink/env`), falling back to `./.env`; variables already set in
+the real environment always take precedence.
 
 Your catalog is now at `http://your-host:8000/opds/`.
 
