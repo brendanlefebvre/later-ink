@@ -15,6 +15,10 @@ PNG_BYTES = bytes.fromhex(
 
 CH0 = "EPUB/chap_000.xhtml"
 
+# Image fetches now resolve the host and refuse non-public addresses
+# (fetch.py). A public IP literal keeps these tests off DNS; MockTransport
+# means nothing is actually connected to.
+
 
 def _mock_client() -> httpx.AsyncClient:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -136,7 +140,7 @@ def test_images_embedded_and_rewritten():
             return await build_epub(
                 title="Pics",
                 author=None,
-                html_content='<p>x</p><img src="https://example.com/a.png">',
+                html_content='<p>x</p><img src="https://93.184.216.34/a.png">',
                 identifier="img1",
                 image_client=client,
             )
@@ -145,7 +149,7 @@ def test_images_embedded_and_rewritten():
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert any(n.endswith(".png") for n in zf.namelist())
         xhtml = zf.read(CH0).decode()
-        assert "https://example.com/a.png" not in xhtml
+        assert "https://93.184.216.34/a.png" not in xhtml
         assert "images/img0.png" in xhtml
 
 
@@ -173,7 +177,7 @@ def test_raw_cover_passes_original_image_through():
                 ),
                 identifier="raw1",
                 preserve_styles=True,
-                image_url="https://example.com/cover.png",
+                image_url="https://93.184.216.34/cover.png",
                 raw_cover=True,
                 image_client=client,
             )
@@ -194,14 +198,14 @@ def test_image_fetch_failure_keeps_remote_ref():
             return await build_epub(
                 title="Broken",
                 author=None,
-                html_content='<img src="https://example.com/gone.png">',
+                html_content='<img src="https://93.184.216.34/gone.png">',
                 identifier="img2",
                 image_client=client,
             )
 
     data = asyncio.run(run())
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        assert "https://example.com/gone.png" in zf.read(CH0).decode()
+        assert "https://93.184.216.34/gone.png" in zf.read(CH0).decode()
 
 
 def test_epub_identifier_uses_later_ink_prefix():

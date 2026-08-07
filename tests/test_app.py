@@ -1,6 +1,7 @@
 import re
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from later_ink import main
@@ -15,6 +16,9 @@ SECRET_PAT = r"([a-z]+(?:-[a-z]+){3})"
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("ALLOW_FREE_SIGNUP", "1")
+    # Signups mean stored tokens, and the app refuses to start with signups on
+    # and no key — see test_encryption_key_required_for_signups.
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.delenv("READWISE_TOKEN", raising=False)
 
     async def fake_validate(token):

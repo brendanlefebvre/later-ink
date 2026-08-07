@@ -55,6 +55,17 @@ def allow_free_signup() -> bool:
     return os.environ.get("ALLOW_FREE_SIGNUP", "").lower() in ("1", "true", "yes")
 
 
+def signups_enabled() -> bool:
+    """True when /start can create users — i.e. this is a multi-tenant instance.
+
+    Distinguishes the two deployment modes: a self-hoster runs with their own
+    READWISE_TOKEN and no signup path, so nothing is ever persisted to the user
+    table. Once signups are open, stored tokens must survive a restart, which
+    is why this gates the ENCRYPTION_KEY requirement in main.lifespan.
+    """
+    return allow_free_signup() or bool(get_stripe_secret_key())
+
+
 def get_encryption_key() -> str | None:
     """Fernet key for token encryption at rest. Generate with:
     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

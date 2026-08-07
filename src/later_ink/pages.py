@@ -7,6 +7,8 @@ type is League Spartan (served from /assets, the same face used on EPUB covers);
 body copy is set in a system serif to reinforce that this is about reading.
 """
 
+import base64
+import hashlib
 import time
 from html import escape
 
@@ -300,28 +302,66 @@ _STATUSBAR = (
     "</span></header>"
 )
 
+# Script bodies are kept separate from their <script> wrappers so the CSP below
+# can hash exactly the bytes a browser hashes. Editing any of these changes its
+# hash automatically — nothing to keep in sync by hand.
+
 # Applied in <head> before first paint so a saved override doesn't flash the wrong theme.
-_THEME_HEAD_SCRIPT = (
-    "<script>try{var t=localStorage.getItem('ll-theme');"
-    "if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>"
+_THEME_HEAD_JS = (
+    "try{var t=localStorage.getItem('ll-theme');"
+    "if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}"
 )
 
 # Toggle: flip the effective theme and remember it (overrides the OS setting).
-_THEME_TOGGLE_SCRIPT = (
-    "<script>(function(){var r=document.documentElement,"
+_THEME_TOGGLE_JS = (
+    "(function(){var r=document.documentElement,"
     "b=document.querySelector('.theme-toggle');if(!b)return;"
     "b.addEventListener('click',function(){var c=r.getAttribute('data-theme');"
     "if(!c)c=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';"
     "var n=c==='dark'?'light':'dark';r.setAttribute('data-theme',n);"
-    "try{localStorage.setItem('ll-theme',n)}catch(e){}});}());</script>"
+    "try{localStorage.setItem('ll-theme',n)}catch(e){}});}());"
 )
 
 # The status-bar clock mirrors the viewer's own device time (like a real e-reader),
 # so it must be set client-side; server time would be UTC on the host.
-_CLOCK_SCRIPT = (
-    "<script>(function(){var e=document.getElementById('ll-clock');if(!e)return;"
+_CLOCK_JS = (
+    "(function(){var e=document.getElementById('ll-clock');if(!e)return;"
     "function t(){e.textContent=new Date().toLocaleTimeString([],"
-    "{hour:'2-digit',minute:'2-digit'});}t();setInterval(t,15000);}());</script>"
+    "{hour:'2-digit',minute:'2-digit'});}t();setInterval(t,15000);}());"
+)
+
+_INLINE_SCRIPTS = (_THEME_HEAD_JS, _THEME_TOGGLE_JS, _CLOCK_JS)
+
+_THEME_HEAD_SCRIPT = f"<script>{_THEME_HEAD_JS}</script>"
+_THEME_TOGGLE_SCRIPT = f"<script>{_THEME_TOGGLE_JS}</script>"
+_CLOCK_SCRIPT = f"<script>{_CLOCK_JS}</script>"
+
+
+def _script_hash(js: str) -> str:
+    digest = hashlib.sha256(js.encode("utf-8")).digest()
+    return f"'sha256-{base64.b64encode(digest).decode()}'"
+
+
+# Hashes rather than 'unsafe-inline' for scripts: the point of a CSP here is to
+# stop injected script, and 'unsafe-inline' would allow exactly that. Styles
+# still need 'unsafe-inline' — the pages use a <style> block and a few style=
+# attributes, and hashing doesn't cover attributes. That's a much weaker vector
+# than script execution, so it's the line worth drawing.
+#
+# default-src 'none' means anything added later (an analytics script, a CDN
+# font, an XHR) fails visibly in development rather than silently widening the
+# policy. Everything the pages actually load is same-origin.
+CSP = "; ".join(
+    (
+        "default-src 'none'",
+        "script-src " + " ".join(_script_hash(js) for js in _INLINE_SCRIPTS),
+        "style-src 'unsafe-inline'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "form-action 'self'",
+        "base-uri 'none'",
+        "frame-ancestors 'none'",
+    )
 )
 
 _FOOTERBAR = (

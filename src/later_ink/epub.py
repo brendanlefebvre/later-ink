@@ -9,12 +9,16 @@ from ebooklib import epub
 from lxml.html import fromstring, tostring
 
 from . import covers
+from .fetch import fetch_bytes
 
 logger = logging.getLogger(__name__)
 
 # One image-heavy download must not blow up over a Kobo's wifi.
 MAX_IMAGES = 30
 MAX_IMAGE_BYTES_TOTAL = 15 * 1024 * 1024
+# Per-image cap as well as the total: without it a single hostile response
+# could be streamed to the total limit before anything noticed.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
 IMAGE_FETCH_TIMEOUT = 10.0
 
 _EXT_BY_TYPE = {
@@ -24,6 +28,7 @@ _EXT_BY_TYPE = {
     "image/webp": "webp",
     "image/svg+xml": "svg",
 }
+_IMAGE_TYPES = frozenset(_EXT_BY_TYPE)
 
 NORMALIZE_CSS = (
     "body { font-family: serif; line-height: 1.6; max-width: 40em; margin: 0 auto; "
@@ -68,30 +73,58 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
             continue
         if len(items) >= MAX_IMAGES or total_bytes >= MAX_IMAGE_BYTES_TOTAL:
             break
-        try:
-            resp = await client.get(src, timeout=IMAGE_FETCH_TIMEOUT, follow_redirects=True)
-            resp.raise_for_status()
-        except Exception:
-            logger.debug("image fetch failed: %s", src)
+        # src is chosen by whoever wrote the document — see fetch.py for why
+        # this can't be a plain client.get.
+        got = await fetch_bytes(
+            client,
+            src,
+            timeout=IMAGE_FETCH_TIMEOUT,
+            max_bytes=min(MAX_IMAGE_BYTES, MAX_IMAGE_BYTES_TOTAL - total_bytes),
+            allowed_types=_IMAGE_TYPES,
+        )
+        if got is None:
             continue
-        media_type = resp.headers.get("content-type", "").split(";")[0].strip()
-        ext = _EXT_BY_TYPE.get(media_type)
-        if ext is None or len(resp.content) == 0:
-            continue
-        if total_bytes + len(resp.content) > MAX_IMAGE_BYTES_TOTAL:
-            break
-        total_bytes += len(resp.content)
+        content, media_type = got
+        ext = _EXT_BY_TYPE[media_type]
+        total_bytes += len(content)
         file_name = f"images/img{i}.{ext}"
         items.append(
             epub.EpubItem(
                 uid=f"img{i}",
                 file_name=file_name,
                 media_type=media_type,
-                content=resp.content,
+                content=content,
             )
         )
         img.set("src", file_name)
     return items
+
+
+# Attribute values that make a reader execute something. EPUB readers rarely
+# run JS, but "rarely" isn't "never" and the content is untrusted, so strip
+# them rather than rely on the reader.
+_URL_ATTRS = ("href", "src", "action", "formaction", "data", "poster", "background")
+_ACTIVE_SCHEME = re.compile(r"^[\s\x00-\x20]*(javascript|vbscript|data)[\s\x00-\x20]*:", re.I)
+# data:image/... is the one data: URL worth keeping: an inline image already
+# works offline, which is the whole point of the book we're building.
+_INLINE_IMAGE = re.compile(r"^[\s\x00-\x20]*data[\s\x00-\x20]*:\s*image/", re.I)
+
+
+def _strip_active_content(doc) -> None:
+    """Remove event handlers and script-bearing URLs in place.
+
+    <script> and <style> elements are removed separately; this covers what
+    survives element removal — onload/onerror attributes and javascript: URLs.
+    data: is included because data:text/html is a script vector.
+    """
+    for el in doc.xpath("//*"):
+        for name in list(el.attrib):
+            if name.lower().startswith("on"):
+                del el.attrib[name]
+        for name in _URL_ATTRS:
+            value = el.get(name)
+            if value and _ACTIVE_SCHEME.match(value) and not _INLINE_IMAGE.match(value):
+                del el.attrib[name]
 
 
 def _split_units(doc) -> list | None:
@@ -123,14 +156,17 @@ def _serialize(el) -> str:
     return re.sub(r'\s+epub:type="[^"]*"', "", xml)
 
 
-async def _fetch_bytes(client: httpx.AsyncClient, url: str) -> bytes | None:
-    try:
-        resp = await client.get(url, timeout=IMAGE_FETCH_TIMEOUT, follow_redirects=True)
-        resp.raise_for_status()
-        return resp.content
-    except Exception:
-        logger.debug("cover image fetch failed: %s", url)
-        return None
+async def _fetch_cover(client: httpx.AsyncClient, url: str) -> bytes | None:
+    # image_url comes from upstream article metadata, so it gets the same
+    # treatment as an <img src> in the body.
+    got = await fetch_bytes(
+        client,
+        url,
+        timeout=IMAGE_FETCH_TIMEOUT,
+        max_bytes=MAX_IMAGE_BYTES,
+        allowed_types=_IMAGE_TYPES,
+    )
+    return got[0] if got else None
 
 
 async def build_epub(
@@ -174,7 +210,7 @@ async def build_epub(
     owns_client = image_client is None
     client = image_client or httpx.AsyncClient()
     try:
-        cover_src = await _fetch_bytes(client, image_url) if image_url else None
+        cover_src = await _fetch_cover(client, image_url) if image_url else None
         try:
             doc = fromstring(html_content)
             if preserve_styles:
@@ -183,6 +219,7 @@ async def build_epub(
                 parent = el.getparent()
                 if parent is not None:
                     parent.remove(el)
+            _strip_active_content(doc)
 
             image_items = await _embed_images(doc, client)
 
