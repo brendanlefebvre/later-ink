@@ -289,8 +289,9 @@ async def stats(request: Request, token: str = Query(default="")):
             referrers=store.top_referrers(since),
             recent=store.recent_hits(50),
         ),
-        # The URL carries the token; keep the response out of shared/browser caches.
-        headers={"Cache-Control": "no-store"},
+        # No Cache-Control here: the security_headers middleware sets
+        # "private, no-store" on every non-public path, /stats included. A
+        # weaker header set here would just be overwritten and mislead.
     )
 
 

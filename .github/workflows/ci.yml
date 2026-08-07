@@ -7,11 +7,25 @@ on:
     branches: ["main"]
   pull_request:
 
+# A new push to the same PR makes the previous run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Nothing here writes to the repo. Declared explicitly so the jobs don't
+    # inherit whatever the repository default happens to be.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # This workflow runs on pull_request, and `pip install -e .` executes
+          # build code from the PR. Don't leave a usable token in the git config
+          # for it to find — no step here does authenticated git operations.
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -21,8 +35,12 @@ jobs:
 
   audit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

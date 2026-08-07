@@ -2,10 +2,12 @@ import hashlib
 import io
 import logging
 import re
+import time
 from html import escape
 
 import httpx
 from ebooklib import epub
+from lxml import etree
 from lxml.html import fromstring, tostring
 
 from . import covers
@@ -20,6 +22,11 @@ MAX_IMAGE_BYTES_TOTAL = 15 * 1024 * 1024
 # could be streamed to the total limit before anything noticed.
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 IMAGE_FETCH_TIMEOUT = 10.0
+# A budget for the whole image phase, not per image: MAX_IMAGES slow responses
+# at IMAGE_FETCH_TIMEOUT each (times the redirect hops) would otherwise hold a
+# single download open for many minutes. Images are a nice-to-have, so when the
+# budget runs out the rest stay remote.
+IMAGE_PHASE_BUDGET = 60.0
 
 _EXT_BY_TYPE = {
     "image/jpeg": "jpg",
@@ -67,24 +74,33 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
     """
     items: list[epub.EpubItem] = []
     total_bytes = 0
+    deadline = time.monotonic() + IMAGE_PHASE_BUDGET
     for i, img in enumerate(doc.iter("img")):
         src = img.get("src") or ""
         if not src.startswith(("http://", "https://")):
             continue
         if len(items) >= MAX_IMAGES or total_bytes >= MAX_IMAGE_BYTES_TOTAL:
             break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.debug("image budget spent; leaving the rest of the images remote")
+            break
         # src is chosen by whoever wrote the document — see fetch.py for why
         # this can't be a plain client.get.
         got = await fetch_bytes(
             client,
             src,
-            timeout=IMAGE_FETCH_TIMEOUT,
+            timeout=min(IMAGE_FETCH_TIMEOUT, remaining),
             max_bytes=min(MAX_IMAGE_BYTES, MAX_IMAGE_BYTES_TOTAL - total_bytes),
             allowed_types=_IMAGE_TYPES,
         )
         if got is None:
             continue
         content, media_type = got
+        if media_type == "image/svg+xml":
+            content = _sanitize_svg(content)
+            if content is None:
+                continue
         ext = _EXT_BY_TYPE[media_type]
         total_bytes += len(content)
         file_name = f"images/img{i}.{ext}"
@@ -103,27 +119,75 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
 # Attribute values that make a reader execute something. EPUB readers rarely
 # run JS, but "rarely" isn't "never" and the content is untrusted, so strip
 # them rather than rely on the reader.
-_URL_ATTRS = ("href", "src", "action", "formaction", "data", "poster", "background")
-_ACTIVE_SCHEME = re.compile(r"^[\s\x00-\x20]*(javascript|vbscript|data)[\s\x00-\x20]*:", re.I)
+_URL_ATTRS = frozenset(
+    ("href", "src", "action", "formaction", "data", "poster", "background")
+)
+_ACTIVE_SCHEME = re.compile(r"^(javascript|vbscript|data):", re.I)
 # data:image/... is the one data: URL worth keeping: an inline image already
 # works offline, which is the whole point of the book we're building.
-_INLINE_IMAGE = re.compile(r"^[\s\x00-\x20]*data[\s\x00-\x20]*:\s*image/", re.I)
+_INLINE_IMAGE = re.compile(r"^data:image/", re.I)
+# Renderers drop control characters (notably tab, LF, CR) from a URL before
+# resolving it, so "java&#9;script:x" is live javascript: by the time it
+# matters. Normalize the same way before testing the scheme, or the entity
+# form walks straight past a scheme match.
+_URL_NOISE = re.compile(r"[\x00-\x20\x7f]")
 
 
-def _strip_active_content(doc) -> None:
+def _is_active_url(value: str) -> bool:
+    cleaned = _URL_NOISE.sub("", value)
+    if _INLINE_IMAGE.match(cleaned):
+        return False
+    return _ACTIVE_SCHEME.match(cleaned) is not None
+
+
+def _sanitize_svg(data: bytes) -> bytes | None:
+    """Strip active content from a fetched SVG, or None if it won't parse.
+
+    SVG is the one entry in the image allowlist that is also a document
+    format: it can carry <script>, event handlers, and javascript: links.
+    A reader displaying it through <img> shouldn't run any of that, but the
+    file ships inside the book and can be opened directly, so it gets the same
+    treatment as the chapter HTML rather than a promise about the renderer.
+
+    Parsing is done with entity resolution and network access off — this is
+    attacker-supplied XML, so external entities would be an XXE and a file-read
+    primitive.
+    """
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
+    try:
+        root = etree.fromstring(data, parser=parser)
+    except etree.XMLSyntaxError:
+        logger.debug("dropping unparseable SVG")
+        return None
+    # foreignObject is how arbitrary (X)HTML — scripts included — gets smuggled
+    # into an SVG document.
+    for el in root.xpath(
+        "//*[local-name()='script' or local-name()='foreignObject' or local-name()='handler']"
+    ):
+        parent = el.getparent()
+        if parent is not None:
+            parent.remove(el)
+    _strip_active_content(root)
+    return etree.tostring(root, xml_declaration=True, encoding="utf-8")
+
+
+def _strip_active_content(root) -> None:
     """Remove event handlers and script-bearing URLs in place.
 
     <script> and <style> elements are removed separately; this covers what
     survives element removal — onload/onerror attributes and javascript: URLs.
     data: is included because data:text/html is a script vector.
+
+    Attributes are matched on local name so this works on namespaced markup
+    too: in SVG the dangerous link attribute is xlink:href, which arrives here
+    as "{http://www.w3.org/1999/xlink}href".
     """
-    for el in doc.xpath("//*"):
+    for el in root.xpath("//*"):
         for name in list(el.attrib):
-            if name.lower().startswith("on"):
+            local = name.rpartition("}")[2].lower()
+            if local.startswith("on"):
                 del el.attrib[name]
-        for name in _URL_ATTRS:
-            value = el.get(name)
-            if value and _ACTIVE_SCHEME.match(value) and not _INLINE_IMAGE.match(value):
+            elif local in _URL_ATTRS and _is_active_url(el.attrib[name]):
                 del el.attrib[name]
 
 

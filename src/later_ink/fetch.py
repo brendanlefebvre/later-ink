@@ -26,6 +26,7 @@ which is a lot of machinery for this threat model. Documented, not fixed.
 import asyncio
 import ipaddress
 import logging
+import re
 import socket
 from urllib.parse import urlsplit, urlunsplit
 
@@ -92,7 +93,7 @@ async def fetch_bytes(
         try:
             await _validate(url)
         except ValueError as e:
-            logger.debug("blocked fetch %s: %s", url, e)
+            logger.debug("blocked fetch %s: %s", _redact(url), e)
             return None
 
         try:
@@ -110,21 +111,21 @@ async def fetch_bytes(
 
                 media_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
                 if allowed_types is not None and media_type not in allowed_types:
-                    logger.debug("skipping %s: content-type %r", url, media_type)
+                    logger.debug("skipping %s: content-type %r", _redact(url), media_type)
                     return None
 
                 # Trust Content-Length only to reject early; the cap below is
                 # what actually bounds memory, since the header can lie.
                 declared = resp.headers.get("content-length")
                 if declared and declared.isdigit() and int(declared) > max_bytes:
-                    logger.debug("skipping %s: declared %s bytes", url, declared)
+                    logger.debug("skipping %s: declared %s bytes", _redact(url), declared)
                     return None
 
                 body = bytearray()
                 async for chunk in resp.aiter_bytes():
                     body.extend(chunk)
                     if len(body) > max_bytes:
-                        logger.debug("skipping %s: body exceeds %d bytes", url, max_bytes)
+                        logger.debug("skipping %s: body exceeds %d bytes", _redact(url), max_bytes)
                         return None
                 if not body:
                     return None
@@ -138,9 +139,19 @@ async def fetch_bytes(
 
 
 def _redact(url: str) -> str:
-    """Drop query and fragment before logging a third-party URL (may carry tokens)."""
+    """Make a third-party URL safe to log.
+
+    Two problems, both because the URL is text an attacker chose. The query
+    string can carry a token, so it's dropped along with the fragment. And a
+    newline in the value would let it forge whole log lines, so control
+    characters are escaped rather than passed through.
+    """
     try:
         p = urlsplit(url)
-        return urlunsplit((p.scheme, p.netloc, p.path, "", ""))
+        cleaned = urlunsplit((p.scheme, p.netloc, p.path, "", ""))
     except ValueError:
         return "(unparseable url)"
+    return _LOG_UNSAFE.sub(lambda m: f"\\x{ord(m.group()):02x}", cleaned)[:300]
+
+
+_LOG_UNSAFE = re.compile(r"[\x00-\x1f\x7f]")

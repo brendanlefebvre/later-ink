@@ -209,21 +209,139 @@ def test_epub_build_skips_private_image_without_failing():
 # ------------------------------------------------------------------ M6
 
 
+def _build(html: str, ident: str) -> str:
+    """Build a book from `html` and return chapter 0. Never touches the network:
+    a mock client keeps the <img> fetches (and their DNS lookups) local."""
+
+    def handler(request):
+        return httpx.Response(404)
+
+    async def run():
+        async with _client(handler) as client:
+            return await build_epub(
+                title="A", author=None, html_content=html, identifier=ident,
+                image_client=client,
+            )
+
+    with zipfile.ZipFile(io.BytesIO(asyncio.run(run()))) as zf:
+        return zf.read("EPUB/chap_000.xhtml").decode()
+
+
 def test_event_handlers_and_javascript_urls_stripped():
-    html = (
+    out = _build(
         '<p onclick="steal()">x</p>'
-        '<img src="http://x/y.png" onerror="alert(1)">'
+        f'<img src="http://{PUBLIC}/y.png" onerror="alert(1)">'
         '<a href="javascript:alert(1)">bad</a>'
         '<a href="https://example.com/ok">good</a>'
-        '<img src="data:image/png;base64,AAAA">'
+        '<img src="data:image/png;base64,AAAA">',
+        "x1",
     )
-    data = asyncio.run(build_epub(title="A", author=None, html_content=html, identifier="x1"))
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        out = zf.read("EPUB/chap_000.xhtml").decode()
     assert "onclick" not in out and "onerror" not in out
     assert "javascript:" not in out
     assert "https://example.com/ok" in out  # ordinary links survive
     assert "data:image/png;base64" in out  # inline images are the one data: to keep
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "javascript:alert(1)",
+        "  JaVaScRiPt:alert(1)",
+        "java&#9;script:alert(1)",  # tab, as an entity
+        "java&#10;script:alert(1)",  # newline
+        "java&#13;script:alert(1)",  # carriage return
+        "&#106;avascript:alert(1)",  # first letter as an entity
+        "vbscript:msgbox(1)",
+        "data:text/html,<script>alert(1)</script>",
+    ],
+)
+def test_active_urls_stripped_including_control_char_evasions(href):
+    # A reader drops control characters from a URL before resolving it, so
+    # "java&#9;script:" is live javascript: by the time it matters — matching
+    # the literal scheme alone lets the entity form through.
+    out = _build(f'<a href="{href}">x</a>', "ev")
+    assert "alert" not in out and "msgbox" not in out, out
+
+
+def test_fetched_svg_is_sanitized():
+    # SVG is the one allowlisted image type that is also a document format.
+    svg = (
+        b'<svg xmlns="http://www.w3.org/2000/svg" '
+        b'xmlns:xlink="http://www.w3.org/1999/xlink">'
+        b"<script>alert(1)</script>"
+        b'<a xlink:href="javascript:alert(2)"><circle r="9" onclick="alert(3)"/></a>'
+        b"<foreignObject><body onload=\"alert(4)\"/></foreignObject>"
+        b'<rect width="10" height="10"/>'
+        b"</svg>"
+    )
+
+    def handler(request):
+        return httpx.Response(200, content=svg, headers={"content-type": "image/svg+xml"})
+
+    async def run():
+        async with _client(handler) as client:
+            return await build_epub(
+                title="S", author=None,
+                html_content=f'<img src="http://{PUBLIC}/a.svg">',
+                identifier="svg1", image_client=client,
+            )
+
+    with zipfile.ZipFile(io.BytesIO(asyncio.run(run()))) as zf:
+        names = [n for n in zf.namelist() if n.endswith(".svg")]
+        assert names, "svg should still be embedded, just defanged"
+        out = zf.read(names[0]).decode()
+    assert "<script" not in out and "foreignObject" not in out
+    assert "onclick" not in out and "onload" not in out
+    assert "javascript:" not in out
+    assert "<rect" in out  # the actual drawing survives
+
+
+def test_malformed_svg_is_dropped_not_embedded():
+    def handler(request):
+        return httpx.Response(
+            200, content=b"<svg><unclosed>", headers={"content-type": "image/svg+xml"}
+        )
+
+    async def run():
+        async with _client(handler) as client:
+            return await build_epub(
+                title="S", author=None,
+                html_content=f'<img src="http://{PUBLIC}/bad.svg">',
+                identifier="svg2", image_client=client,
+            )
+
+    with zipfile.ZipFile(io.BytesIO(asyncio.run(run()))) as zf:
+        assert not [n for n in zf.namelist() if n.endswith(".svg")]
+
+
+def test_svg_external_entities_are_not_resolved():
+    # Parsing attacker-supplied XML with entity resolution on would be an XXE
+    # and a file-read primitive.
+    svg = (
+        b'<?xml version="1.0"?>'
+        b'<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+        b'<svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>'
+    )
+
+    def handler(request):
+        return httpx.Response(200, content=svg, headers={"content-type": "image/svg+xml"})
+
+    async def run():
+        async with _client(handler) as client:
+            return await build_epub(
+                title="S", author=None,
+                html_content=f'<img src="http://{PUBLIC}/xxe.svg">',
+                identifier="svg3", image_client=client,
+            )
+
+    with zipfile.ZipFile(io.BytesIO(asyncio.run(run()))) as zf:
+        out = "".join(zf.read(n).decode(errors="replace") for n in zf.namelist() if n.endswith(".svg"))
+    assert "root:" not in out and "/bin/" not in out
+
+
+def test_redacted_url_cannot_forge_log_lines():
+    assert "\n" not in fetch._redact("http://h/a\nINFO fake log line")
+    assert "secret" not in fetch._redact("http://h/a?token=secret")
 
 
 # ------------------------------------------------------------------ M3
