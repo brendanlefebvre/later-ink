@@ -141,14 +141,19 @@ async def fetch_bytes(
 def _redact(url: str) -> str:
     """Make a third-party URL safe to log.
 
-    Two problems, both because the URL is text an attacker chose. The query
-    string can carry a token, so it's dropped along with the fragment. And a
-    newline in the value would let it forge whole log lines, so control
-    characters are escaped rather than passed through.
+    Three problems, all because the URL is text an attacker chose. The query
+    string can carry a token, so it's dropped along with the fragment. So can
+    userinfo (`http://user:pass@host/`), so the authority is rebuilt from just
+    the host and port rather than reusing netloc. And a newline in the value
+    would let it forge whole log lines, so control characters are escaped
+    rather than passed through.
     """
     try:
         p = urlsplit(url)
-        cleaned = urlunsplit((p.scheme, p.netloc, p.path, "", ""))
+        authority = p.hostname or ""
+        if p.port:
+            authority = f"{authority}:{p.port}"
+        cleaned = urlunsplit((p.scheme, authority, p.path, "", ""))
     except ValueError:
         return "(unparseable url)"
     return _LOG_UNSAFE.sub(lambda m: f"\\x{ord(m.group()):02x}", cleaned)[:300]

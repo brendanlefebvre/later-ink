@@ -123,9 +123,13 @@ _URL_ATTRS = frozenset(
     ("href", "src", "action", "formaction", "data", "poster", "background")
 )
 _ACTIVE_SCHEME = re.compile(r"^(javascript|vbscript|data):", re.I)
-# data:image/... is the one data: URL worth keeping: an inline image already
-# works offline, which is the whole point of the book we're building.
-_INLINE_IMAGE = re.compile(r"^data:image/", re.I)
+# An inline raster image is the one data: URL worth keeping: it already works
+# offline, which is the whole point of the book we're building. SVG is
+# deliberately absent — it's a document format, not a picture, and a
+# data:image/svg+xml payload is never fetched so it never reaches
+# _sanitize_svg. Treating it as an image would wave active content straight
+# through the one check that would have caught it.
+_INLINE_IMAGE = re.compile(r"^data:image/(png|jpe?g|gif|webp|avif|bmp)[;,]", re.I)
 # Renderers drop control characters (notably tab, LF, CR) from a URL before
 # resolving it, so "java&#9;script:x" is live javascript: by the time it
 # matters. Normalize the same way before testing the scheme, or the entity
@@ -138,6 +142,24 @@ def _is_active_url(value: str) -> bool:
     if _INLINE_IMAGE.match(cleaned):
         return False
     return _ACTIVE_SCHEME.match(cleaned) is not None
+
+
+# Elements dropped from a fetched SVG, by local name:
+#   script/handler   - execute directly
+#   foreignObject    - smuggles arbitrary (X)HTML, scripts included
+#   style            - CSS can @import a remote sheet, turning an embedded book
+#                      asset back into an outbound request and breaking the
+#                      offline guarantee. Articles already lose their <style>
+#                      on the HTML path, so this matches that posture.
+#   animate/set/...  - SMIL writes attributes at render time:
+#                      <animate attributeName="xlink:href" to="javascript:..."/>
+#                      reintroduces a live URL that attribute stripping, which
+#                      only sees the static tree, can never catch.
+_SVG_DROP = (
+    "script", "handler", "foreignObject", "style",
+    "animate", "animateTransform", "animateMotion", "set", "discard",
+)
+_SVG_DROP_PREDICATE = " or ".join(f"local-name()='{n}'" for n in _SVG_DROP)
 
 
 def _sanitize_svg(data: bytes) -> bytes | None:
@@ -156,17 +178,24 @@ def _sanitize_svg(data: bytes) -> bytes | None:
     parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
     try:
         root = etree.fromstring(data, parser=parser)
-    except etree.XMLSyntaxError:
+    except (etree.LxmlError, ValueError):
+        # Any lxml failure, not just XMLSyntaxError: letting one escape would
+        # hit build_epub's outer handler and replace the whole article with the
+        # fallback page over one bad image.
         logger.debug("dropping unparseable SVG")
         return None
-    # foreignObject is how arbitrary (X)HTML — scripts included — gets smuggled
-    # into an SVG document.
-    for el in root.xpath(
-        "//*[local-name()='script' or local-name()='foreignObject' or local-name()='handler']"
-    ):
+    for el in root.xpath(f"//*[{_SVG_DROP_PREDICATE}]"):
         parent = el.getparent()
         if parent is not None:
             parent.remove(el)
+    # Entity references survive parsing as nodes (unexpanded, which is the
+    # point), but the DOCTYPE that declared them is not carried into the
+    # output. Leaving them would emit XML referencing an undefined entity —
+    # inert, but a fatal parse error for a strict reader.
+    for node in [n for n in root.iter() if isinstance(n, etree._Entity)]:
+        parent = node.getparent()
+        if parent is not None:
+            parent.remove(node)
     _strip_active_content(root)
     return etree.tostring(root, xml_declaration=True, encoding="utf-8")
 

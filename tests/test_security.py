@@ -13,7 +13,7 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from later_ink import fetch, main, pages
-from later_ink.epub import build_epub
+from later_ink.epub import _sanitize_svg, build_epub
 from later_ink.store import Store
 
 # A genuinely public address. MockTransport intercepts before any connection,
@@ -335,13 +335,63 @@ def test_svg_external_entities_are_not_resolved():
             )
 
     with zipfile.ZipFile(io.BytesIO(asyncio.run(run()))) as zf:
-        out = "".join(zf.read(n).decode(errors="replace") for n in zf.namelist() if n.endswith(".svg"))
+        names = [n for n in zf.namelist() if n.endswith(".svg")]
+        # Assert it was embedded before asserting what it contains: if the SVG
+        # were dropped, an empty string would satisfy the checks below and the
+        # test would pass without exercising entity resolution at all.
+        assert names, "SVG should be embedded, so the entity check is meaningful"
+        out = zf.read(names[0]).decode(errors="replace")
     assert "root:" not in out and "/bin/" not in out
+    assert "&xxe;" not in out  # not expanded, and not left as a live reference
 
 
-def test_redacted_url_cannot_forge_log_lines():
+def test_inline_svg_data_url_is_not_treated_as_an_image():
+    # data:image/svg+xml is a document, and it is never fetched, so it never
+    # reaches _sanitize_svg. Allowing it as an "image" would route active
+    # content around the one check that would have caught it.
+    out = _build(
+        '<img src="data:image/svg+xml,<svg onload=alert(1)></svg>">'
+        '<img src="data:image/png;base64,AAAA">',
+        "isvg",
+    )
+    assert "svg+xml" not in out
+    assert "data:image/png;base64" in out  # raster inline images still fine
+
+
+def test_svg_style_and_smil_are_removed():
+    # @import turns an embedded book asset back into an outbound request, and
+    # SMIL writes attributes at render time, where attribute stripping (which
+    # only sees the static tree) cannot follow.
+    svg = (
+        b'<svg xmlns="http://www.w3.org/2000/svg" '
+        b'xmlns:xlink="http://www.w3.org/1999/xlink">'
+        b'<style>@import url("https://evil.example/x.css");</style>'
+        b'<animate attributeName="xlink:href" to="javascript:alert(1)"/>'
+        b'<set attributeName="href" to="javascript:alert(2)"/>'
+        b'<rect width="10" height="10"/></svg>'
+    )
+    out = _sanitize_svg(svg).decode()
+    assert "@import" not in out and "evil.example" not in out
+    assert "animate" not in out and "<set" not in out
+    assert "javascript:" not in out
+    assert "<rect" in out
+
+
+def test_sanitize_svg_survives_any_lxml_failure():
+    # Escaping here would reach build_epub's outer handler and replace the whole
+    # article with the fallback page over a single bad image.
+    for bad in (b"", b"\x00\x01\x02", b"<svg><unclosed>", b"not xml at all", b"<?xml?>"):
+        assert _sanitize_svg(bad) is None
+
+
+def test_redacted_url_drops_secrets_and_cannot_forge_log_lines():
     assert "\n" not in fetch._redact("http://h/a\nINFO fake log line")
     assert "secret" not in fetch._redact("http://h/a?token=secret")
+    # userinfo is the same secret-leak class as the query string
+    redacted = fetch._redact("http://user:s3cr3t@host/path")
+    assert "s3cr3t" not in redacted and "user" not in redacted
+    assert "host/path" in redacted
+    assert fetch._redact("http://host:8443/p") == "http://host:8443/p"  # port kept
 
 
 # ------------------------------------------------------------------ M3
