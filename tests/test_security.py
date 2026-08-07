@@ -377,6 +377,27 @@ def test_svg_style_and_smil_are_removed():
     assert "<rect" in out
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'<style>@import url("https://evil.example/x.css");</style>',
+        b"<script>alert(1)</script>",
+        b'<html xmlns="http://www.w3.org/1999/xhtml"><body>hi</body></html>',
+        b"<foreignObject><body/></foreignObject>",
+    ],
+)
+def test_non_svg_root_served_as_svg_is_rejected(body):
+    # The removal pass can only detach an element from its parent, and a root
+    # has none — so without a root check these walk through untouched.
+    # Content-Type is only the server's claim about what it sent.
+    assert _sanitize_svg(body) is None
+
+
+def test_svg_root_is_accepted_with_or_without_namespace():
+    assert _sanitize_svg(b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>') is not None
+    assert _sanitize_svg(b"<svg><rect/></svg>") is not None
+
+
 def test_sanitize_svg_survives_any_lxml_failure():
     # Escaping here would reach build_epub's outer handler and replace the whole
     # article with the fallback page over a single bad image.

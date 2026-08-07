@@ -160,6 +160,7 @@ _SVG_DROP = (
     "animate", "animateTransform", "animateMotion", "set", "discard",
 )
 _SVG_DROP_PREDICATE = " or ".join(f"local-name()='{n}'" for n in _SVG_DROP)
+_SVG_NS = "http://www.w3.org/2000/svg"
 
 
 def _sanitize_svg(data: bytes) -> bytes | None:
@@ -183,6 +184,14 @@ def _sanitize_svg(data: bytes) -> bytes | None:
         # hit build_epub's outer handler and replace the whole article with the
         # fallback page over one bad image.
         logger.debug("dropping unparseable SVG")
+        return None
+    # The root must actually be an <svg>. The removal pass below can only
+    # detach elements from a parent, and the root has none — so a body of
+    # "<script>alert(1)</script>" served as image/svg+xml would walk through
+    # this function untouched. Content-Type is the server's claim; this is
+    # where it gets checked.
+    if root.tag not in (f"{{{_SVG_NS}}}svg", "svg"):
+        logger.debug("dropping non-SVG document served as image/svg+xml")
         return None
     for el in root.xpath(f"//*[{_SVG_DROP_PREDICATE}]"):
         parent = el.getparent()
