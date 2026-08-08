@@ -144,6 +144,10 @@ class Store:
             logger.warning("Stored token for a user is undecryptable (key changed?)")
             return None
 
+    def user_count(self) -> int:
+        with self._conn() as conn:
+            return conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+
     def stripe_ref_used(self, stripe_ref: str) -> bool:
         with self._conn() as conn:
             row = conn.execute(

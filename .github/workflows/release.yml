@@ -7,14 +7,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The ghcr and pypi jobs below need write scopes; this one doesn't.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
       - run: ruff check src tests
       - run: pytest tests/ -q
+      # Don't publish a release with a known-vulnerable dependency. Audits the
+      # environment installed above, i.e. what the >= pins resolve to now.
+      - run: python -m pip install pip-audit
+      - run: pip-audit --progress-spinner off
 
   ghcr:
     needs: test

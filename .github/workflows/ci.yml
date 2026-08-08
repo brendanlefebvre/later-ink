@@ -1,0 +1,52 @@
+name: ci
+
+# release.yml runs the same checks, but only on a v* tag — by which point a
+# regression is already tagged. This runs them on the way in.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+# A new push to the same PR makes the previous run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Nothing here writes to the repo. Declared explicitly so the jobs don't
+    # inherit whatever the repository default happens to be.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # This workflow runs on pull_request, and `pip install -e .` executes
+          # build code from the PR. Don't leave a usable token in the git config
+          # for it to find — no step here does authenticated git operations.
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: pytest tests/ -q
+
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Install first, then audit the resulting environment: that audits the
+      # versions the >= pins actually resolve to today. Without a lockfile this
+      # is the only continuous check that a dependency hasn't picked up a CVE,
+      # and it's why this job can start failing without the code changing.
+      - run: python -m pip install -e ".[dev]" pip-audit
+      - run: pip-audit --progress-spinner off

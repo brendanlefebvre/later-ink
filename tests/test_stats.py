@@ -83,4 +83,16 @@ def test_stats_non_ascii_token_gates_without_error(tmp_path, monkeypatch):
         assert c.get("/stats", params={"token": "wrong"}).status_code == 404
         ok = c.get("/stats", params={"token": "clé-secrète-café"})
         assert ok.status_code == 200
-        assert ok.headers.get("cache-control") == "no-store"
+        assert ok.headers.get("cache-control") == "private, no-store"
+
+
+def test_stats_accepts_bearer_token(stats_client):
+    # A token in the query string lands in access logs and browser history;
+    # the header is the option for anything that can set one.
+    c = stats_client
+    assert c.get("/stats", headers={"Authorization": "Bearer sekret"}).status_code == 200
+    assert c.get("/stats", headers={"Authorization": "bearer sekret"}).status_code == 200
+    assert c.get("/stats", headers={"Authorization": "Bearer wrong"}).status_code == 404
+    # A present-but-wrong header is not rescued by a correct query param.
+    resp = c.get("/stats", params={"token": "sekret"}, headers={"Authorization": "Bearer no"})
+    assert resp.status_code == 404

@@ -2,20 +2,31 @@ import hashlib
 import io
 import logging
 import re
+import time
 from html import escape
 
 import httpx
 from ebooklib import epub
+from lxml import etree
 from lxml.html import fromstring, tostring
 
 from . import covers
+from .fetch import fetch_bytes
 
 logger = logging.getLogger(__name__)
 
 # One image-heavy download must not blow up over a Kobo's wifi.
 MAX_IMAGES = 30
 MAX_IMAGE_BYTES_TOTAL = 15 * 1024 * 1024
+# Per-image cap as well as the total: without it a single hostile response
+# could be streamed to the total limit before anything noticed.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
 IMAGE_FETCH_TIMEOUT = 10.0
+# A budget for the whole image phase, not per image: MAX_IMAGES slow responses
+# at IMAGE_FETCH_TIMEOUT each (times the redirect hops) would otherwise hold a
+# single download open for many minutes. Images are a nice-to-have, so when the
+# budget runs out the rest stay remote.
+IMAGE_PHASE_BUDGET = 60.0
 
 _EXT_BY_TYPE = {
     "image/jpeg": "jpg",
@@ -24,6 +35,7 @@ _EXT_BY_TYPE = {
     "image/webp": "webp",
     "image/svg+xml": "svg",
 }
+_IMAGE_TYPES = frozenset(_EXT_BY_TYPE)
 
 NORMALIZE_CSS = (
     "body { font-family: serif; line-height: 1.6; max-width: 40em; margin: 0 auto; "
@@ -62,36 +74,159 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
     """
     items: list[epub.EpubItem] = []
     total_bytes = 0
+    deadline = time.monotonic() + IMAGE_PHASE_BUDGET
     for i, img in enumerate(doc.iter("img")):
         src = img.get("src") or ""
         if not src.startswith(("http://", "https://")):
             continue
         if len(items) >= MAX_IMAGES or total_bytes >= MAX_IMAGE_BYTES_TOTAL:
             break
-        try:
-            resp = await client.get(src, timeout=IMAGE_FETCH_TIMEOUT, follow_redirects=True)
-            resp.raise_for_status()
-        except Exception:
-            logger.debug("image fetch failed: %s", src)
-            continue
-        media_type = resp.headers.get("content-type", "").split(";")[0].strip()
-        ext = _EXT_BY_TYPE.get(media_type)
-        if ext is None or len(resp.content) == 0:
-            continue
-        if total_bytes + len(resp.content) > MAX_IMAGE_BYTES_TOTAL:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.debug("image budget spent; leaving the rest of the images remote")
             break
-        total_bytes += len(resp.content)
+        # src is chosen by whoever wrote the document — see fetch.py for why
+        # this can't be a plain client.get.
+        got = await fetch_bytes(
+            client,
+            src,
+            timeout=min(IMAGE_FETCH_TIMEOUT, remaining),
+            max_bytes=min(MAX_IMAGE_BYTES, MAX_IMAGE_BYTES_TOTAL - total_bytes),
+            allowed_types=_IMAGE_TYPES,
+        )
+        if got is None:
+            continue
+        content, media_type = got
+        if media_type == "image/svg+xml":
+            content = _sanitize_svg(content)
+            if content is None:
+                continue
+        ext = _EXT_BY_TYPE[media_type]
+        total_bytes += len(content)
         file_name = f"images/img{i}.{ext}"
         items.append(
             epub.EpubItem(
                 uid=f"img{i}",
                 file_name=file_name,
                 media_type=media_type,
-                content=resp.content,
+                content=content,
             )
         )
         img.set("src", file_name)
     return items
+
+
+# Attribute values that make a reader execute something. EPUB readers rarely
+# run JS, but "rarely" isn't "never" and the content is untrusted, so strip
+# them rather than rely on the reader.
+_URL_ATTRS = frozenset(
+    ("href", "src", "action", "formaction", "data", "poster", "background")
+)
+_ACTIVE_SCHEME = re.compile(r"^(javascript|vbscript|data):", re.I)
+# An inline raster image is the one data: URL worth keeping: it already works
+# offline, which is the whole point of the book we're building. SVG is
+# deliberately absent — it's a document format, not a picture, and a
+# data:image/svg+xml payload is never fetched so it never reaches
+# _sanitize_svg. Treating it as an image would wave active content straight
+# through the one check that would have caught it.
+_INLINE_IMAGE = re.compile(r"^data:image/(png|jpe?g|gif|webp|avif|bmp)[;,]", re.I)
+# Renderers drop control characters (notably tab, LF, CR) from a URL before
+# resolving it, so "java&#9;script:x" is live javascript: by the time it
+# matters. Normalize the same way before testing the scheme, or the entity
+# form walks straight past a scheme match.
+_URL_NOISE = re.compile(r"[\x00-\x20\x7f]")
+
+
+def _is_active_url(value: str) -> bool:
+    cleaned = _URL_NOISE.sub("", value)
+    if _INLINE_IMAGE.match(cleaned):
+        return False
+    return _ACTIVE_SCHEME.match(cleaned) is not None
+
+
+# Elements dropped from a fetched SVG, by local name:
+#   script/handler   - execute directly
+#   foreignObject    - smuggles arbitrary (X)HTML, scripts included
+#   style            - CSS can @import a remote sheet, turning an embedded book
+#                      asset back into an outbound request and breaking the
+#                      offline guarantee. Articles already lose their <style>
+#                      on the HTML path, so this matches that posture.
+#   animate/set/...  - SMIL writes attributes at render time:
+#                      <animate attributeName="xlink:href" to="javascript:..."/>
+#                      reintroduces a live URL that attribute stripping, which
+#                      only sees the static tree, can never catch.
+_SVG_DROP = (
+    "script", "handler", "foreignObject", "style",
+    "animate", "animateTransform", "animateMotion", "set", "discard",
+)
+_SVG_DROP_PREDICATE = " or ".join(f"local-name()='{n}'" for n in _SVG_DROP)
+_SVG_NS = "http://www.w3.org/2000/svg"
+
+
+def _sanitize_svg(data: bytes) -> bytes | None:
+    """Strip active content from a fetched SVG, or None if it won't parse.
+
+    SVG is the one entry in the image allowlist that is also a document
+    format: it can carry <script>, event handlers, and javascript: links.
+    A reader displaying it through <img> shouldn't run any of that, but the
+    file ships inside the book and can be opened directly, so it gets the same
+    treatment as the chapter HTML rather than a promise about the renderer.
+
+    Parsing is done with entity resolution and network access off — this is
+    attacker-supplied XML, so external entities would be an XXE and a file-read
+    primitive.
+    """
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
+    try:
+        root = etree.fromstring(data, parser=parser)
+    except (etree.LxmlError, ValueError):
+        # Any lxml failure, not just XMLSyntaxError: letting one escape would
+        # hit build_epub's outer handler and replace the whole article with the
+        # fallback page over one bad image.
+        logger.debug("dropping unparseable SVG")
+        return None
+    # The root must actually be an <svg>. The removal pass below can only
+    # detach elements from a parent, and the root has none — so a body of
+    # "<script>alert(1)</script>" served as image/svg+xml would walk through
+    # this function untouched. Content-Type is the server's claim; this is
+    # where it gets checked.
+    if root.tag not in (f"{{{_SVG_NS}}}svg", "svg"):
+        logger.debug("dropping non-SVG document served as image/svg+xml")
+        return None
+    for el in root.xpath(f"//*[{_SVG_DROP_PREDICATE}]"):
+        parent = el.getparent()
+        if parent is not None:
+            parent.remove(el)
+    # Entity references survive parsing as nodes (unexpanded, which is the
+    # point), but the DOCTYPE that declared them is not carried into the
+    # output. Leaving them would emit XML referencing an undefined entity —
+    # inert, but a fatal parse error for a strict reader.
+    for node in [n for n in root.iter() if isinstance(n, etree._Entity)]:
+        parent = node.getparent()
+        if parent is not None:
+            parent.remove(node)
+    _strip_active_content(root)
+    return etree.tostring(root, xml_declaration=True, encoding="utf-8")
+
+
+def _strip_active_content(root) -> None:
+    """Remove event handlers and script-bearing URLs in place.
+
+    <script> and <style> elements are removed separately; this covers what
+    survives element removal — onload/onerror attributes and javascript: URLs.
+    data: is included because data:text/html is a script vector.
+
+    Attributes are matched on local name so this works on namespaced markup
+    too: in SVG the dangerous link attribute is xlink:href, which arrives here
+    as "{http://www.w3.org/1999/xlink}href".
+    """
+    for el in root.xpath("//*"):
+        for name in list(el.attrib):
+            local = name.rpartition("}")[2].lower()
+            if local.startswith("on"):
+                del el.attrib[name]
+            elif local in _URL_ATTRS and _is_active_url(el.attrib[name]):
+                del el.attrib[name]
 
 
 def _split_units(doc) -> list | None:
@@ -123,14 +258,17 @@ def _serialize(el) -> str:
     return re.sub(r'\s+epub:type="[^"]*"', "", xml)
 
 
-async def _fetch_bytes(client: httpx.AsyncClient, url: str) -> bytes | None:
-    try:
-        resp = await client.get(url, timeout=IMAGE_FETCH_TIMEOUT, follow_redirects=True)
-        resp.raise_for_status()
-        return resp.content
-    except Exception:
-        logger.debug("cover image fetch failed: %s", url)
-        return None
+async def _fetch_cover(client: httpx.AsyncClient, url: str) -> bytes | None:
+    # image_url comes from upstream article metadata, so it gets the same
+    # treatment as an <img src> in the body.
+    got = await fetch_bytes(
+        client,
+        url,
+        timeout=IMAGE_FETCH_TIMEOUT,
+        max_bytes=MAX_IMAGE_BYTES,
+        allowed_types=_IMAGE_TYPES,
+    )
+    return got[0] if got else None
 
 
 async def build_epub(
@@ -174,7 +312,7 @@ async def build_epub(
     owns_client = image_client is None
     client = image_client or httpx.AsyncClient()
     try:
-        cover_src = await _fetch_bytes(client, image_url) if image_url else None
+        cover_src = await _fetch_cover(client, image_url) if image_url else None
         try:
             doc = fromstring(html_content)
             if preserve_styles:
@@ -183,6 +321,7 @@ async def build_epub(
                 parent = el.getparent()
                 if parent is not None:
                     parent.remove(el)
+            _strip_active_content(doc)
 
             image_items = await _embed_images(doc, client)
 

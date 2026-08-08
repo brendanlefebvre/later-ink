@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
@@ -39,17 +41,63 @@ _connectors: dict[str, Connector] = {}
 _tenant_connectors: OrderedDict[str, ReadwiseConnector] = OrderedDict()
 
 
+def _derive_csrf_key(encryption_key: str) -> bytes:
+    """Separate CSRF signing key from the same root secret.
+
+    The CSRF HMAC used to be keyed with the raw Fernet key. That worked, but it
+    tied two unrelated rotation stories together: rotating the token-encryption
+    key to respond to a suspected disclosure would also have invalidated every
+    outstanding CSRF token, and vice versa. HKDF gives each purpose its own key
+    with no extra config for the operator.
+    """
+    return HKDF(
+        algorithm=hashes.SHA256(), length=32, salt=None, info=b"later-ink/csrf/v1"
+    ).derive(encryption_key.encode())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     key = config.get_encryption_key()
-    if key is None:
+    ephemeral = key is None
+    if ephemeral:
+        # Fail closed. An ephemeral key silently destroys every stored token on
+        # the next restart, and the instance looks healthy the whole time — the
+        # operator finds out when all their users' catalogs 404 at once. A
+        # single-user self-host instance stores no tokens, so there it's fine.
+        if config.signups_enabled():
+            raise RuntimeError(
+                "ENCRYPTION_KEY must be set when signups are enabled "
+                "(ALLOW_FREE_SIGNUP or STRIPE_SECRET_KEY): without it, stored "
+                "Readwise tokens become unreadable on restart and every user "
+                "has to re-onboard. Generate one with: python -c "
+                '"from cryptography.fernet import Fernet; '
+                'print(Fernet.generate_key().decode())"'
+            )
         key = Fernet.generate_key().decode()
+
+    try:
+        fernet = Fernet(key.encode())
+    except (ValueError, TypeError) as e:
+        raise RuntimeError(
+            "ENCRYPTION_KEY is not a valid Fernet key (expected 32 url-safe "
+            "base64-encoded bytes)"
+        ) from e
+
+    app.state.csrf_key = _derive_csrf_key(key)
+    app.state.store = Store(config.get_database_path(), fernet)
+    if ephemeral:
+        # Signups may have been turned off after the fact; the tokens already in
+        # the database are just as lost.
+        if app.state.store.user_count():
+            raise RuntimeError(
+                "ENCRYPTION_KEY is not set but the database already has users — "
+                "their stored tokens cannot be decrypted without the original key."
+            )
         logger.warning(
-            "ENCRYPTION_KEY is not set — using an ephemeral key. Stored tokens "
-            "will be unreadable after restart. Set ENCRYPTION_KEY in production."
+            "ENCRYPTION_KEY is not set — using an ephemeral key. Fine for "
+            "single-user self-hosting, which stores no tokens; set it before "
+            "enabling signups."
         )
-    app.state.csrf_key = key.encode()
-    app.state.store = Store(config.get_database_path(), Fernet(key.encode()))
     app.state.limiter = MissLimiter(app.state.store, limit=20, window=3600.0)
     token = config.get_readwise_token()
     if token:
@@ -74,6 +122,49 @@ app = FastAPI(
     redoc_url=None,
     lifespan=lifespan,
 )
+
+
+# Paths whose responses are the same for everyone and safe for a shared cache.
+# Everything else is either a private catalog, a page carrying a secret, or an
+# authenticated view, so the default below is no-store — deny by default, since
+# forgetting to list a new private route is the dangerous direction to fail.
+_PUBLIC_PATHS = frozenset({"/", "/health", "/healthz", "/version"})
+
+
+def _is_public(path: str) -> bool:
+    return path in _PUBLIC_PATHS or path.startswith("/assets/")
+
+
+def _is_https(request: Request) -> bool:
+    if config.trust_proxy_headers():
+        proto = request.headers.get("x-forwarded-proto")
+        if proto:
+            return proto.split(",")[0].strip() == "https"
+    return request.url.scheme == "https"
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Hardening headers, and cache policy for anything user-specific.
+
+    Fly terminates TLS and sets HSTS at the edge, but the app is also run
+    behind other proxies and bare, so it sets its own.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    if _is_https(request):
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers.setdefault("Content-Security-Policy", pages.CSP)
+    if not _is_public(request.url.path):
+        # Overwrite rather than setdefault: a catalog feed or a page showing a
+        # secret must not sit in a proxy cache, whatever the handler asked for.
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 async def _tenant_connector(token: str) -> ReadwiseConnector:
@@ -176,12 +267,17 @@ async def landing(request: Request, background_tasks: BackgroundTasks):
 
 
 @app.get("/stats", response_class=HTMLResponse)
-async def stats(token: str = Query(default="")):
+async def stats(request: Request, token: str = Query(default="")):
     expected = config.get_stats_token()
+    # Prefer the header: a token in the query string ends up in access logs,
+    # browser history, and any Referer the page emits. ?token= stays supported
+    # because it's what you can type on a device without a curl.
+    auth = request.headers.get("authorization", "")
+    presented = auth[7:].strip() if auth[:7].lower() == "bearer " else token
     # Encode both sides: hmac.compare_digest raises TypeError on a non-ASCII
     # str, so a non-ASCII STATS_TOKEN would 500 the endpoint instead of gating.
     if not expected or not hmac.compare_digest(
-        token.encode("utf-8"), expected.encode("utf-8")
+        presented.encode("utf-8"), expected.encode("utf-8")
     ):
         raise HTTPException(404)  # 404, not 403 — don't confirm the endpoint exists
     store: Store = app.state.store
@@ -193,8 +289,9 @@ async def stats(token: str = Query(default="")):
             referrers=store.top_referrers(since),
             recent=store.recent_hits(50),
         ),
-        # The URL carries the token; keep the response out of shared/browser caches.
-        headers={"Cache-Control": "no-store"},
+        # No Cache-Control here: the security_headers middleware sets
+        # "private, no-store" on every non-public path, /stats included. A
+        # weaker header set here would just be overwritten and mislead.
     )
 
 
@@ -303,7 +400,17 @@ async def start_post(
             status_code=400,
         )
 
-    secret = app.state.store.create_user(readwise_token, stripe_ref=session_id)
+    try:
+        secret = app.state.store.create_user(readwise_token, stripe_ref=session_id)
+    except ValueError:
+        # The UNIQUE(stripe_ref) insert is the real gate; the stripe_ref_used()
+        # check above is only a friendlier early exit, and two concurrent
+        # requests carrying the same cs_… can both pass it. Losing that race is
+        # a duplicate submission, not a server error.
+        return HTMLResponse(
+            pages.start_form(None, "This payment has already been used to create a catalog."),
+            status_code=403,
+        )
     catalog_url = f"{config.get_base_url()}/{secret}/"
     return pages.success(catalog_url, secret, _csrf_token(secret))
 
