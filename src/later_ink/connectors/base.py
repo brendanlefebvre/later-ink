@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -48,6 +49,52 @@ class Article:
 # stops, so one query on a huge library can't turn into an unbounded crawl.
 SEARCH_SCAN_LIMIT = 400
 
+# Reading-time estimate for word-count filters. 250 wpm is the usual adult
+# prose figure and the one read-it-later apps quote, so "10 minutes" here means
+# roughly what it means in Readwise Reader.
+WORDS_PER_MINUTE = 250
+
+# Bounds for a view scan (see Connector.scan_articles). A view is assembled by
+# paging through folders and filtering client-side, so each request stops at
+# the first of: enough matches for a full page, too many items examined, or too
+# many upstream calls. Whatever is left is reachable through the next cursor,
+# so these cap one request's cost, not the view's reach.
+VIEW_PAGE_TARGET = 25
+VIEW_SCAN_LIMIT = 400
+VIEW_MAX_PAGES = 12
+
+
+def minutes_to_words(minutes: int) -> int:
+    return minutes * WORDS_PER_MINUTE
+
+
+def _encode_scan_cursor(folder_index: int, page: str | None) -> str:
+    """Position in a view scan: which source folder, and where inside it.
+
+    The upstream page cursor is kept verbatim after the separator, so it may
+    itself contain "|" — decoding splits once, from the left.
+    """
+    return f"{folder_index}|{page or ''}"
+
+
+def _decode_scan_cursor(cursor: str | None) -> tuple[int, str | None]:
+    """Inverse of _encode_scan_cursor; (0, None) — start over — if unusable.
+
+    An unusable folder index discards the upstream page along with it: half a
+    cursor is not better than none, since resuming a fresh folder from a page
+    belonging to some other one is how you skip items silently.
+    """
+    if not cursor:
+        return 0, None
+    index, _, page = cursor.partition("|")
+    try:
+        folder_index = int(index)
+    except ValueError:
+        return 0, None  # malformed (or a cursor from an older release)
+    if folder_index < 0:
+        return 0, None
+    return folder_index, page or None
+
 
 class Connector(ABC):
     name: str
@@ -68,6 +115,80 @@ class Connector(ABC):
     async def get_article_html(self, article_id: str) -> tuple[Article, str]:
         """Return (article_metadata, html_content)."""
         ...
+
+    async def list_views(self) -> list[Folder]:
+        """Extra catalog entries that cut across locations rather than being
+        one — "Short reads", "Books", and the like.
+
+        They appear alongside the real folders in the navigation feed and are
+        browsed through the same URL, so their ids must not collide with folder
+        ids. Empty by default: a connector only offers the views its upstream
+        supplies the metadata for."""
+        return []
+
+    async def list_view_articles(
+        self, view_id: str, cursor: str | None = None
+    ) -> tuple[list[Article], str | None]:
+        """Return (articles, next_cursor) for one of `list_views()`.
+
+        Only called for ids that came from `list_views()`, so the base class —
+        which offers none — never reaches this."""
+        raise KeyError(view_id)
+
+    async def scan_articles(
+        self,
+        matches: Callable[[Article], bool],
+        folder_ids: Sequence[str],
+        cursor: str | None = None,
+    ) -> tuple[list[Article], str | None]:
+        """Page through `folder_ids` in order, keeping the articles that match.
+
+        For views the upstream API can't express as a query (a word-count
+        filter, say), so they have to be assembled here. Returns one page worth
+        of matches plus a cursor to resume from, or None once every source
+        folder is exhausted.
+
+        Sparse views are the reason for the scan bounds rather than a plain
+        page-at-a-time filter: if one upstream page yields no matches, this
+        keeps fetching instead of handing the reader an empty screen, up to the
+        VIEW_* caps.
+        """
+        folder_index, page = _decode_scan_cursor(cursor)
+        if folder_index >= len(folder_ids):
+            # Past the end: a cursor forged by hand, or a real one issued before
+            # the source folders changed under it. Restart rather than return an
+            # empty list, which would read as "this view is empty".
+            folder_index, page = 0, None
+
+        matched: list[Article] = []
+        seen: set[str] = set()
+        scanned = fetched = 0
+
+        while folder_index < len(folder_ids):
+            if (
+                len(matched) >= VIEW_PAGE_TARGET
+                or scanned >= VIEW_SCAN_LIMIT
+                or fetched >= VIEW_MAX_PAGES
+            ):
+                # Stop on a page boundary so the cursor names the next unread
+                # page exactly — no item is served twice or skipped.
+                return matched, _encode_scan_cursor(folder_index, page)
+
+            articles, next_page = await self.list_articles(folder_ids[folder_index], page)
+            fetched += 1
+            scanned += len(articles)
+            for article in articles:
+                if article.id not in seen and matches(article):
+                    seen.add(article.id)
+                    matched.append(article)
+
+            if next_page:
+                page = next_page
+            else:
+                folder_index += 1
+                page = None
+
+        return matched, None
 
     async def search(
         self, query: str, cursor: str | None = None

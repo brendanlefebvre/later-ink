@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from . import __version__, config, opds, pages
 from .connectors import readwise
-from .connectors.base import ArticleUnavailable, Connector, UpstreamError
+from .connectors.base import ArticleUnavailable, Connector, Folder, UpstreamError
 from .connectors.readwise import ReadwiseConnector
 from .connectors.wallabag import WallabagConnector
 from .epub import build_epub
@@ -491,13 +491,18 @@ async def start_post(
 # ------------------------------------------- single-user self-host mode
 
 
+async def _catalog_entries(c: Connector) -> list[Folder]:
+    """Everything the navigation feed offers: the connector's real locations,
+    then its cross-cutting views (Short reads, Books, …) after them."""
+    return [*await c.list_folders(), *await c.list_views()]
+
+
 async def _connector_folder_feed(name: str, c: Connector) -> Response:
-    folders = await c.list_folders()
     return Response(
         content=opds.folder_catalog(
             f"urn:later-ink:{name}",
             c.description,
-            folders,
+            await _catalog_entries(c),
             base=f"/opds/{name}",
             start_href="/opds/",
             search_href=f"/opds/{name}/search.xml",
@@ -607,12 +612,11 @@ async def tenant_delete(secret: str, request: Request, csrf: str | None = Form(N
 async def tenant_root(secret: str, request: Request):
     token = _resolve_secret(secret, request)
     c = await _tenant_connector(token)
-    folders = await c.list_folders()
     return Response(
         content=opds.folder_catalog(
             _feed_id(secret),
             "Later.Ink",
-            folders,
+            await _catalog_entries(c),
             base=f"/{secret}",
             start_href=f"/{secret}/",
             search_href=f"/{secret}/search.xml",
@@ -689,12 +693,17 @@ async def _folder_response(
     epub_base: str,
     start_href: str,
 ) -> Response:
-    folders = await c.list_folders()
-    folder = next((f for f in folders if f.id == folder_id), None)
-    if not folder:
-        raise HTTPException(404, f"Folder '{folder_id}' not found")
+    # Views share the folder URL space, so a folder id wins if both define one.
+    folder = next((f for f in await c.list_folders() if f.id == folder_id), None)
+    if folder:
+        articles, next_cursor = await c.list_articles(folder_id, cursor)
+    else:
+        view = next((v for v in await c.list_views() if v.id == folder_id), None)
+        if not view:
+            raise HTTPException(404, f"Folder '{folder_id}' not found")
+        folder = view
+        articles, next_cursor = await c.list_view_articles(folder_id, cursor)
 
-    articles, next_cursor = await c.list_articles(folder_id, cursor)
     return Response(
         content=opds.article_feed(
             feed_id,

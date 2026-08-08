@@ -275,6 +275,62 @@ def test_self_host_search(client):
         main._connectors.clear()
 
 
+def test_catalog_lists_views_after_the_folders(client):
+    secret, _ = _signup(client)
+    resp = client.get(f"/{secret}/")
+    assert resp.status_code == 200
+    for title in ("Short reads", "Long reads", "Books"):
+        assert f"<title>{title}</title>" in resp.text
+        assert 'rel="subsection"' in resp.text
+    # Views come after the real locations, not mixed in among them.
+    assert resp.text.index("<title>Later</title>") < resp.text.index("<title>Short reads</title>")
+    assert f"/{secret}/short-reads/" in resp.text
+
+
+def test_view_feed_is_browsable_and_items_are_downloadable(client, monkeypatch):
+    async def fake_view_articles(self, view_id, cursor=None):
+        assert view_id == "long-reads"
+        return [Article(id="42", title="A Long Read", word_count=9000)], None
+
+    monkeypatch.setattr(ReadwiseConnector, "list_view_articles", fake_view_articles)
+    secret, _ = _signup(client)
+    resp = client.get(f"/{secret}/long-reads/")
+    assert resp.status_code == 200
+    assert "kind=acquisition" in resp.headers["content-type"]
+    assert "<title>Long reads</title>" in resp.text
+    assert f"/{secret}/articles/42.epub" in resp.text
+
+
+def test_view_feed_paginates_through_its_cursor(client, monkeypatch):
+    async def fake_view_articles(self, view_id, cursor=None):
+        if cursor is None:
+            return [Article(id="1", title="First")], "1|abc"
+        assert cursor == "1|abc"  # handed back verbatim
+        return [Article(id="2", title="Second")], None
+
+    monkeypatch.setattr(ReadwiseConnector, "list_view_articles", fake_view_articles)
+    secret, _ = _signup(client)
+    first = client.get(f"/{secret}/short-reads/")
+    assert 'rel="next"' in first.text
+    assert "cursor=1%7Cabc" in first.text  # separator escaped, not a second param
+    second = client.get(f"/{secret}/short-reads/", params={"cursor": "1|abc"})
+    assert "Second" in second.text and 'rel="next"' not in second.text
+
+
+def test_unknown_folder_still_404s(client):
+    secret, _ = _signup(client)
+    assert client.get(f"/{secret}/not-a-real-list/").status_code == 404
+
+
+def test_self_host_mode_serves_views_too(client):
+    main._connectors["readwise"] = ReadwiseConnector("good-token")
+    try:
+        root = client.get("/opds/")
+        assert "/opds/readwise/books/" in root.text
+    finally:
+        main._connectors.clear()
+
+
 def test_head_requests_supported_on_feeds(client):
     secret, _ = _signup(client)
     assert client.head("/opds/").status_code == 200
