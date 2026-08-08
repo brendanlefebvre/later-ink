@@ -150,6 +150,25 @@ ALLOW_FREE_SIGNUP=1 python -m uvicorn later_ink.main:app --reload
 pytest
 ```
 
+`pyproject.toml` keeps loose `>=` ranges, which is what anyone installing
+Later.ink from PyPI resolves against. CI and the Docker image instead install
+from `requirements.txt` / `requirements-dev.txt`, which pin every transitive
+dependency with hashes, so a release is built from the versions that were
+actually tested. Regenerate them after changing a dependency:
+
+```bash
+uv pip compile pyproject.toml --universal --generate-hashes \
+  --python-version 3.11 -o requirements.txt
+uv pip compile pyproject.toml --extra dev --universal --generate-hashes \
+  --python-version 3.11 -o requirements-dev.txt
+```
+
+`--universal` keeps one file valid for both image architectures;
+`--python-version 3.11` matches the project's floor rather than whichever
+interpreter you happen to be running. The `audit` CI job runs `pip-audit`
+against the lock — pinning freezes known vulnerabilities in place as surely as
+it freezes versions, so that job is what makes a stale pin visible.
+
 ## Credits
 
 Generated EPUB covers use [League Spartan](https://github.com/theleagueof/league-spartan)
