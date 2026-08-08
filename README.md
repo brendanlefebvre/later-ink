@@ -183,6 +183,42 @@ of a freshly fetched one. The Dockerfile builds a wheel in a first stage for the
 same reason: without build isolation the backend would otherwise remain
 installed in the shipped image.
 
+### Verifying the image locally
+
+The release workflow builds `linux/amd64` and `linux/arm64`, so a plain
+`docker build` on one machine only exercises half of what ships. A missing
+wheel for the other architecture shows up nowhere else — CI does not build the
+image, only the release tag does.
+
+```bash
+docker build -t later-ink:test .
+
+# Both release architectures. Docker's default driver cannot do multi-platform,
+# so this needs a builder with a different driver; --builder targets it for the
+# one command instead of changing your default. (Alternatively, enable the
+# containerd image store in Docker/OrbStack settings and the default driver
+# handles it natively, making the create/rm unnecessary.)
+docker buildx create --name later-ink-test
+docker buildx build --builder later-ink-test \
+  --platform linux/amd64,linux/arm64 --output=type=cacheonly .
+docker buildx rm later-ink-test
+```
+
+`--output=type=cacheonly` builds without producing an image; the exit code is
+the answer. Watch for either build dropping into a *source compile* of `lxml`,
+`pillow` or `cryptography` — that means the lock is missing a wheel hash for
+that platform. A healthy build downloads wheels and takes seconds per package.
+
+Two properties worth checking on the built image:
+
+```bash
+docker run --rm later-ink:test pip list | grep -i hatchling   # expect nothing
+docker run --rm later-ink:test pip list | grep -Ei 'fastapi|lxml|pillow'
+```
+
+The first confirms the build backend stayed in the first stage rather than
+shipping. The second should match `requirements.txt` exactly.
+
 `--universal` keeps one file valid for both image architectures;
 `--python-version 3.11` matches the project's floor rather than whichever
 interpreter you happen to be running. The `audit` CI job runs `pip-audit` against
