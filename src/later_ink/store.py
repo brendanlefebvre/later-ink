@@ -87,9 +87,22 @@ class Store:
                 )
                 """
             )
+            # Counting one IP's events: covering, so the count never touches the
+            # table itself.
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS rate_events_lookup"
                 " ON rate_events (bucket, ip, ts)"
+            )
+            # Expiring a bucket. The index above can't serve this: ip sits
+            # between bucket and ts, so with ip unconstrained there's no range
+            # to scan and SQLite walks every row in the bucket — inside the
+            # BEGIN IMMEDIATE that every admission holds. That cost grows with
+            # the number of distinct addresses in the window, which is to say
+            # it grows fastest under exactly the probing this limiter exists
+            # to stop.
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS rate_events_expiry"
+                " ON rate_events (bucket, ts)"
             )
             # Superseded by rate_events, which adds the bucket column. Dropped
             # rather than left behind: the rows were per-IP counters with an

@@ -100,6 +100,30 @@ def test_rate_event_limit_is_enforced_per_bucket(store):
     assert store.try_record_event("miss", "1.2.3.4", 2, 3600) is True
 
 
+def test_rate_event_queries_are_indexed(store):
+    """Both rate-limit queries must use an index, not scan.
+
+    They run inside the BEGIN IMMEDIATE that every admission holds, and the
+    row count grows with the number of distinct addresses in the window — so a
+    scan here degrades fastest under exactly the probing traffic the limiter
+    exists to throttle.
+    """
+    with sqlite3.connect(store.path) as conn:
+        expiry = conn.execute(
+            "EXPLAIN QUERY PLAN DELETE FROM rate_events WHERE bucket = ? AND ts < ?",
+            ("miss", 0.0),
+        ).fetchall()[0][-1]
+        count = conn.execute(
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM rate_events"
+            " WHERE bucket = ? AND ip = ? AND ts >= ?",
+            ("miss", "1.2.3.4", 0.0),
+        ).fetchall()[0][-1]
+    # ts must be part of the expiry lookup, not just bucket: "(bucket=?)" alone
+    # means every row in the bucket is walked.
+    assert "rate_events_expiry (bucket=? AND ts<?)" in expiry, expiry
+    assert "rate_events_lookup" in count and "ts>" in count, count
+
+
 def test_pruning_one_bucket_leaves_another_intact(store):
     # Buckets have different windows; pruning the short one must not evict
     # rows the long one still counts.
