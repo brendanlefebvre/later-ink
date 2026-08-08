@@ -2,3 +2,9 @@
 # Compiled to requirements-build.txt so the backend is pinned and hashed like
 # everything else, rather than resolved fresh at build time. See README.md.
 hatchling
+
+# Not declared by hatchling, but imported by its editable build hook
+# (prepare_metadata_for_build_editable). With build isolation, pip happened to
+# supply it; pinning the backend means naming it here or every `pip install -e`
+# fails with a bare ModuleNotFoundError.
+editables
