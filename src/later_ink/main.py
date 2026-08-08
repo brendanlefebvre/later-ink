@@ -35,6 +35,10 @@ OPENSEARCH_MEDIA = "application/opensearchdescription+xml"
 
 MAX_TENANT_CONNECTORS = 200
 
+# Longest rate-limit window in use, and so the age past which a rate-limit row
+# is certainly dead regardless of which bucket it came from.
+RATE_EVENT_MAX_AGE = 3600.0
+
 # Single-user (self-host) connectors, keyed by connector name
 _connectors: dict[str, Connector] = {}
 # Multi-tenant connector cache, keyed by Readwise token
@@ -98,6 +102,10 @@ async def lifespan(app: FastAPI):
             "single-user self-hosting, which stores no tokens; set it before "
             "enabling signups."
         )
+    # Rate-limit rows are IP addresses with no purpose past their window, and
+    # they're only pruned when a later event lands in the same bucket. Sweeping
+    # at startup bounds how long an instance that went quiet can hold them.
+    app.state.store.prune_rate_events(RATE_EVENT_MAX_AGE)
     # Unknown-secret probes and signups both need to survive a cold start, so
     # they're durable; feed traffic is throttled in-process — see ratelimit.py.
     app.state.limiter = DurableLimiter(
@@ -191,9 +199,10 @@ async def rate_limit(request: Request, call_next):
     ip = _client_ip(request)
     if path == "/start":
         limiter: DurableLimiter = app.state.signup_limiter
-        if limiter.blocked(ip):
+        # One transaction decides and records: a burst of concurrent signups
+        # must not all pass a separate check before any of them counts.
+        if not limiter.try_record(ip):
             return _too_many(_RETRY_AFTER_SIGNUP)
-        limiter.record(ip)
     elif not app.state.feed_limiter.allow(ip):
         return _too_many(_RETRY_AFTER_FEED)
 
@@ -266,11 +275,18 @@ def _resolve_secret(secret: str, request: Request) -> str:
         raise HTTPException(404)
     limiter: DurableLimiter = app.state.limiter
     ip = _client_ip(request)
+    # Cheap pre-check: skip the lookup for an IP that's already over. Racy by
+    # nature, which is fine — it only decides whether to do work early. It also
+    # covers a *correct* secret, so brute-forcing one doesn't become usable the
+    # moment it's found.
     if limiter.blocked(ip):
         raise HTTPException(429, "Too many attempts; try again later")
     token = app.state.store.get_token(secret)
     if token is None:
-        limiter.record(ip)
+        # The accounting, though, is the atomic one: this is what actually
+        # bounds how many guesses a burst of concurrent probes can spend.
+        if not limiter.try_record(ip):
+            raise HTTPException(429, "Too many attempts; try again later")
         raise HTTPException(404, "Unknown catalog")
     return token
 

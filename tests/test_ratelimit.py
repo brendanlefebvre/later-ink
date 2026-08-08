@@ -1,4 +1,6 @@
 """Rate limiting: the limiter primitives, and the middleware that applies them."""
+import threading
+
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -45,7 +47,7 @@ def test_limiters_disabled_when_limit_is_zero(tmp_path):
     store = Store(str(tmp_path / "d.db"), Fernet(Fernet.generate_key()))
     dur = DurableLimiter(store, bucket="signup", limit=0, window=3600.0)
     for _ in range(50):
-        dur.record("ip")
+        dur.try_record("ip")
     assert dur.blocked("ip") is False
 
 
@@ -54,9 +56,73 @@ def test_durable_limiter_counts_and_blocks(tmp_path):
     lim = DurableLimiter(store, bucket="signup", limit=3, window=3600.0)
     for _ in range(3):
         assert lim.blocked("1.1.1.1") is False
-        lim.record("1.1.1.1")
+        assert lim.try_record("1.1.1.1") is True
     assert lim.blocked("1.1.1.1") is True
     assert lim.blocked("2.2.2.2") is False
+
+
+def test_durable_admission_is_atomic_across_instances(tmp_path):
+    """The limit must hold when instances decide concurrently.
+
+    These counters live in SQLite precisely because they're shared between
+    machines. A count() followed by an insert lets every instance read the
+    same under-limit total before any of them writes, which doesn't overshoot
+    the limit by one or two — it lets a whole burst through.
+    """
+    db = str(tmp_path / "race.db")
+    key = Fernet.generate_key()
+    limit, instances = 5, 20
+    limiters = [
+        DurableLimiter(Store(db, Fernet(key)), bucket="signup", limit=limit, window=3600.0)
+        for _ in range(instances)
+    ]
+    admitted = []
+    barrier = threading.Barrier(instances)
+
+    def attempt(lim):
+        barrier.wait()  # line them all up on the same decision
+        if lim.try_record("1.2.3.4"):
+            admitted.append(1)
+
+    threads = [threading.Thread(target=attempt, args=(lim,)) for lim in limiters]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(admitted) == limit
+
+
+def test_try_record_reports_exhaustion(tmp_path):
+    store = Store(str(tmp_path / "t.db"), Fernet(Fernet.generate_key()))
+    lim = DurableLimiter(store, bucket="signup", limit=2, window=3600.0)
+    assert [lim.try_record("1.1.1.1") for _ in range(4)] == [True, True, False, False]
+    assert lim.try_record("2.2.2.2") is True  # still per-IP
+
+
+def test_try_record_is_a_no_op_when_disabled(tmp_path):
+    store = Store(str(tmp_path / "t.db"), Fernet(Fernet.generate_key()))
+    lim = DurableLimiter(store, bucket="signup", limit=0, window=3600.0)
+    assert all(lim.try_record("1.1.1.1") for _ in range(50))
+
+
+def test_idle_rate_rows_are_pruned_at_startup(tmp_path):
+    # Rows are otherwise only pruned by a later write to the same bucket, so an
+    # address that made one request and never returned would persist. These are
+    # IP addresses with no purpose past their window.
+    db = str(tmp_path / "idle.db")
+    store = Store(db, Fernet(Fernet.generate_key()))
+    store.try_record_event("signup", "9.9.9.9", limit=10, window=3600.0)
+    assert store.event_count("signup", "9.9.9.9", 3600.0) == 1
+    # Nothing else ever writes to this bucket; a sweep is what clears it.
+    assert store.prune_rate_events(max_age=0.0) == 1
+    assert store.event_count("signup", "9.9.9.9", 3600.0) == 0
+
+
+def test_pruning_keeps_rows_inside_the_retention_window(tmp_path):
+    store = Store(str(tmp_path / "keep.db"), Fernet(Fernet.generate_key()))
+    store.try_record_event("signup", "9.9.9.9", limit=10, window=3600.0)
+    assert store.prune_rate_events(max_age=3600.0) == 0  # still live
+    assert store.event_count("signup", "9.9.9.9", 3600.0) == 1
 
 
 def test_durable_limiter_survives_a_restart(tmp_path):
@@ -66,8 +132,8 @@ def test_durable_limiter_survives_a_restart(tmp_path):
     db = str(tmp_path / "d.db")
     key = Fernet.generate_key()
     lim = DurableLimiter(Store(db, Fernet(key)), bucket="signup", limit=2, window=3600.0)
-    lim.record("1.1.1.1")
-    lim.record("1.1.1.1")
+    lim.try_record("1.1.1.1")
+    lim.try_record("1.1.1.1")
     revived = DurableLimiter(Store(db, Fernet(key)), bucket="signup", limit=2, window=3600.0)
     assert revived.blocked("1.1.1.1") is True
 

@@ -192,19 +192,65 @@ class Store:
     # `bucket` namespaces the counters (unknown-secret probes vs. signups) so
     # they don't spend each other's budget.
 
-    def record_event(self, bucket: str, ip: str, window: float) -> None:
+    def try_record_event(self, bucket: str, ip: str, limit: int, window: float) -> bool:
+        """Count and record in one transaction. True if the event was admitted.
+
+        This has to be atomic, not a count() followed by an insert. The whole
+        reason these counters live in SQLite is that they're shared between
+        instances, and separate statements let every instance read the same
+        under-limit count before any of them writes — which lets a burst of
+        concurrent requests past the limit entirely, not just by one or two.
+
+        BEGIN IMMEDIATE takes the write lock up front, so the count and the
+        insert can't be interleaved by another connection. busy_timeout (set in
+        _conn) covers the resulting contention.
+        """
         now = time.time()
+        conn = self._conn()
+        try:
+            conn.isolation_level = None  # drive the transaction explicitly
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                # Prune this bucket's expired rows: windows differ per bucket,
+                # so a short-window bucket must not evict a long-window one's.
+                conn.execute(
+                    "DELETE FROM rate_events WHERE bucket = ? AND ts < ?",
+                    (bucket, now - window),
+                )
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM rate_events"
+                    " WHERE bucket = ? AND ip = ? AND ts >= ?",
+                    (bucket, ip, now - window),
+                ).fetchone()
+                if row["n"] >= limit:
+                    conn.execute("COMMIT")
+                    return False
+                conn.execute(
+                    "INSERT INTO rate_events (bucket, ip, ts) VALUES (?, ?, ?)",
+                    (bucket, ip, now),
+                )
+                conn.execute("COMMIT")
+                return True
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
+
+    def prune_rate_events(self, max_age: float) -> int:
+        """Drop rate-limit rows older than `max_age`, across every bucket.
+
+        Pruning otherwise only happens when a later event lands in the same
+        bucket, so an address that made one request and never came back would
+        sit in the table indefinitely. These rows are IP addresses, and they
+        have no purpose once their window has passed. Called at startup, which
+        bounds how long a since-idle instance can hold them.
+        """
         with self._conn() as conn:
-            # Prune only this bucket's expired rows: windows differ per bucket,
-            # so a short-window bucket must not evict a long-window one's rows.
-            conn.execute(
-                "DELETE FROM rate_events WHERE bucket = ? AND ts < ?",
-                (bucket, now - window),
+            cur = conn.execute(
+                "DELETE FROM rate_events WHERE ts < ?", (time.time() - max_age,)
             )
-            conn.execute(
-                "INSERT INTO rate_events (bucket, ip, ts) VALUES (?, ?, ?)",
-                (bucket, ip, now),
-            )
+        return cur.rowcount
 
     def event_count(self, bucket: str, ip: str, window: float) -> int:
         with self._conn() as conn:

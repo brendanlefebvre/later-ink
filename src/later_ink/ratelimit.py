@@ -42,14 +42,27 @@ class DurableLimiter:
     def enabled(self) -> bool:
         return self.limit > 0
 
+    def try_record(self, ip: str) -> bool:
+        """Consume one unit of this IP's budget. False if it had none left.
+
+        The admission decision — this method — is a single transaction. Use it
+        rather than blocked()+record(), which lets concurrent instances all
+        read the same under-limit count before any of them writes.
+        """
+        if not self.enabled:
+            return True
+        return self.store.try_record_event(self.bucket, ip, self.limit, self.window)
+
     def blocked(self, ip: str) -> bool:
+        """Best-effort read-only check, for skipping work before doing it.
+
+        Deliberately not the admission decision: it's a plain read, so two
+        callers can both see "under limit" at once. Anything that needs to be
+        counted must go through try_record.
+        """
         if not self.enabled:
             return False
         return self.store.event_count(self.bucket, ip, self.window) >= self.limit
-
-    def record(self, ip: str) -> None:
-        if self.enabled:
-            self.store.record_event(self.bucket, ip, self.window)
 
 
 class MemoryLimiter:

@@ -70,10 +70,15 @@ def test_stripe_ref_reuse(store):
         store.create_user("token-2", stripe_ref="cs_test_123")
 
 
+# A limit high enough that admission always succeeds, for tests about counting
+# rather than about the limit itself.
+NO_LIMIT = 10_000
+
+
 def test_rate_event_counter(store):
     assert store.event_count("miss", "1.2.3.4", 3600) == 0
     for _ in range(5):
-        store.record_event("miss", "1.2.3.4", 3600)
+        assert store.try_record_event("miss", "1.2.3.4", NO_LIMIT, 3600) is True
     assert store.event_count("miss", "1.2.3.4", 3600) == 5
     assert store.event_count("miss", "5.6.7.8", 3600) == 0
 
@@ -81,17 +86,25 @@ def test_rate_event_counter(store):
 def test_rate_event_buckets_are_independent(store):
     # Unknown-secret probes and signups must not spend each other's budget.
     for _ in range(3):
-        store.record_event("miss", "1.2.3.4", 3600)
-    store.record_event("signup", "1.2.3.4", 3600)
+        store.try_record_event("miss", "1.2.3.4", NO_LIMIT, 3600)
+    store.try_record_event("signup", "1.2.3.4", NO_LIMIT, 3600)
     assert store.event_count("miss", "1.2.3.4", 3600) == 3
     assert store.event_count("signup", "1.2.3.4", 3600) == 1
+
+
+def test_rate_event_limit_is_enforced_per_bucket(store):
+    assert store.try_record_event("signup", "1.2.3.4", 2, 3600) is True
+    assert store.try_record_event("signup", "1.2.3.4", 2, 3600) is True
+    assert store.try_record_event("signup", "1.2.3.4", 2, 3600) is False
+    # A different bucket has its own budget, even for the same address.
+    assert store.try_record_event("miss", "1.2.3.4", 2, 3600) is True
 
 
 def test_pruning_one_bucket_leaves_another_intact(store):
     # Buckets have different windows; pruning the short one must not evict
     # rows the long one still counts.
-    store.record_event("signup", "1.2.3.4", 3600)
-    store.record_event("miss", "1.2.3.4", 0.0)  # window 0 -> prunes everything "expired"
+    store.try_record_event("signup", "1.2.3.4", NO_LIMIT, 3600)
+    store.try_record_event("miss", "1.2.3.4", NO_LIMIT, 0.0)  # prunes its own expired rows
     assert store.event_count("signup", "1.2.3.4", 3600) == 1
 
 

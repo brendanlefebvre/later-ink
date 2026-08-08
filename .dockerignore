@@ -26,3 +26,7 @@ tests/
 docker-compose.yml
 fly.toml
 .claude/
+
+# Locked dev dependencies are for CI, not the image (only requirements.txt
+# is COPYed), so keep them out of the build context.
+requirements-dev.txt
