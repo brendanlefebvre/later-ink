@@ -99,6 +99,22 @@ offline. Use KOReader's OPDS search box to find articles by title, author, or
 summary; search scans your most recent saved items (a bounded slice of a very
 large queue) rather than the entire history.
 
+**Lists:** below the folders sit three cross-cutting lists, matching the
+filtered views in Readwise Reader:
+
+| List | What's in it |
+| --- | --- |
+| **Short reads** | Under 10 minutes — for when you have a bus ride, not an evening |
+| **Long reads** | Over 20 minutes, books excluded |
+| **Books** | EPUBs you've uploaded to Reader, wherever they've got to |
+
+Short and long reads are drawn from Later, Shortlist, and New — what you meant
+to read, not what you've already archived — and, like search, cover a bounded
+slice of a very large queue rather than all of it. Books comes straight from
+Readwise's own category filter, so it's complete and pages through everything.
+The 10- and 20-minute thresholds come from Reader's documented view examples,
+estimated at 250 words per minute.
+
 **On iPhone/iPad:** use an ebook reader that supports OPDS — Fablum, justRead, or
 PocketBook — and add the same catalog URL. **On desktop:** Thorium Reader works too.
 
@@ -133,7 +149,7 @@ src/later_ink/
   pages.py         # server-rendered HTML pages
   payments.py      # Stripe verification (optional; inactive unless configured)
   connectors/
-    base.py        # Connector interface: folders / articles / article HTML
+    base.py        # Connector interface: folders / views / articles / article HTML
     readwise.py    # Readwise Reader API v3 connector
     wallabag.py    # Wallabag API v2 connector (OAuth2)
 ```
