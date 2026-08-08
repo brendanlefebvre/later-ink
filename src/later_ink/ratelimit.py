@@ -1,22 +1,94 @@
+"""Per-IP rate limiters.
+
+Two kinds, because the three things being limited have genuinely different
+requirements:
+
+`DurableLimiter` keeps its counters in SQLite, so they survive a machine
+stop/start and are shared across instances. That matters for the two limits
+that are about abuse: guessing catalog secrets, and creating users. An
+in-process counter would reset on every cold start, which on a
+scale-to-zero host is an attacker-controlled event.
+
+`MemoryLimiter` keeps its counters in this process. That's the right trade for
+feed traffic, which is high-volume and where the goal is keeping one client
+from hammering the upstream API — not enforcing a security boundary. Putting
+that on SQLite would mean a write on every catalog request, and store.py is
+explicit that the read paths must not queue behind the writer (see the
+comment on record_hit). A limit that resets on restart is fine here; a
+catalog feed that serializes behind a write lock is not.
+"""
+
+import time
+from collections import OrderedDict, deque
+
 from .store import Store
 
 
-class MissLimiter:
-    """Per-IP limiter for unknown-secret lookups, backed by the SQLite store.
+class DurableLimiter:
+    """Per-IP limiter backed by the SQLite store.
 
-    Secrets are short enough to be guessable in principle, so failed lookups
-    are the thing to throttle: after `limit` misses in `window` seconds, an IP
-    only sees 429s until traffic ages out. State lives in SQLite so it
-    survives machine cold starts and is shared across instances.
+    After `limit` recorded events in `window` seconds, an IP is blocked until
+    its traffic ages out. `bucket` namespaces the counters so unrelated limits
+    don't share a budget.
     """
 
-    def __init__(self, store: Store, limit: int = 20, window: float = 3600.0):
+    def __init__(self, store: Store, bucket: str, limit: int, window: float):
         self.store = store
+        self.bucket = bucket
         self.limit = limit
         self.window = window
 
-    def blocked(self, ip: str) -> bool:
-        return self.store.miss_count(ip, self.window) >= self.limit
+    @property
+    def enabled(self) -> bool:
+        return self.limit > 0
 
-    def record_miss(self, ip: str) -> None:
-        self.store.record_miss(ip, self.window)
+    def blocked(self, ip: str) -> bool:
+        if not self.enabled:
+            return False
+        return self.store.event_count(self.bucket, ip, self.window) >= self.limit
+
+    def record(self, ip: str) -> None:
+        if self.enabled:
+            self.store.record_event(self.bucket, ip, self.window)
+
+
+class MemoryLimiter:
+    """Per-IP sliding window held in this process.
+
+    `max_ips` bounds memory: the IP is either the socket peer or a header from
+    a proxy we've been told to trust, but neither is a reason to let the table
+    grow without limit. Least-recently-seen entries are evicted first, which
+    means a flood of one-off addresses can push out an established offender's
+    counter — acceptable, because those same addresses are each getting their
+    own limit anyway.
+    """
+
+    def __init__(self, limit: int, window: float, max_ips: int = 10_000):
+        self.limit = limit
+        self.window = window
+        self.max_ips = max_ips
+        self._hits: OrderedDict[str, deque[float]] = OrderedDict()
+
+    @property
+    def enabled(self) -> bool:
+        return self.limit > 0
+
+    def allow(self, ip: str) -> bool:
+        """Record a hit and report whether it was within the limit."""
+        if not self.enabled:
+            return True
+        now = time.monotonic()
+        cutoff = now - self.window
+        hits = self._hits.get(ip)
+        if hits is None:
+            hits = deque()
+            self._hits[ip] = hits
+        while hits and hits[0] < cutoff:
+            hits.popleft()
+        self._hits.move_to_end(ip)
+        while len(self._hits) > self.max_ips:
+            self._hits.popitem(last=False)
+        if len(hits) >= self.limit:
+            return False
+        hits.append(now)
+        return True

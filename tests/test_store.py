@@ -70,12 +70,29 @@ def test_stripe_ref_reuse(store):
         store.create_user("token-2", stripe_ref="cs_test_123")
 
 
-def test_miss_counter(store):
-    assert store.miss_count("1.2.3.4", 3600) == 0
+def test_rate_event_counter(store):
+    assert store.event_count("miss", "1.2.3.4", 3600) == 0
     for _ in range(5):
-        store.record_miss("1.2.3.4", 3600)
-    assert store.miss_count("1.2.3.4", 3600) == 5
-    assert store.miss_count("5.6.7.8", 3600) == 0
+        store.record_event("miss", "1.2.3.4", 3600)
+    assert store.event_count("miss", "1.2.3.4", 3600) == 5
+    assert store.event_count("miss", "5.6.7.8", 3600) == 0
+
+
+def test_rate_event_buckets_are_independent(store):
+    # Unknown-secret probes and signups must not spend each other's budget.
+    for _ in range(3):
+        store.record_event("miss", "1.2.3.4", 3600)
+    store.record_event("signup", "1.2.3.4", 3600)
+    assert store.event_count("miss", "1.2.3.4", 3600) == 3
+    assert store.event_count("signup", "1.2.3.4", 3600) == 1
+
+
+def test_pruning_one_bucket_leaves_another_intact(store):
+    # Buckets have different windows; pruning the short one must not evict
+    # rows the long one still counts.
+    store.record_event("signup", "1.2.3.4", 3600)
+    store.record_event("miss", "1.2.3.4", 0.0)  # window 0 -> prunes everything "expired"
+    assert store.event_count("signup", "1.2.3.4", 3600) == 1
 
 
 def test_conn_uses_wal(tmp_path):

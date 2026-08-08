@@ -80,13 +80,22 @@ class Store:
             )
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS misses (
+                CREATE TABLE IF NOT EXISTS rate_events (
+                    bucket TEXT NOT NULL,
                     ip TEXT NOT NULL,
                     ts REAL NOT NULL
                 )
                 """
             )
-            conn.execute("CREATE INDEX IF NOT EXISTS misses_ip_ts ON misses (ip, ts)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS rate_events_lookup"
+                " ON rate_events (bucket, ip, ts)"
+            )
+            # Superseded by rate_events, which adds the bucket column. Dropped
+            # rather than left behind: the rows were per-IP counters with an
+            # hour-long window, so anything in there had already expired, and a
+            # dead table invites someone to write to the wrong one.
+            conn.execute("DROP TABLE IF EXISTS misses")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS hits (
@@ -177,21 +186,32 @@ class Store:
             cur = conn.execute("DELETE FROM users WHERE secret = ?", (secret,))
         return cur.rowcount > 0
 
-    # ------------------------------------------------- unknown-secret misses
+    # ------------------------------------------------------- rate-limit events
     # Durable (survives machine stop/start) and shared across instances,
     # unlike an in-process counter — see docs/review-2026-07-31.md finding 4.
+    # `bucket` namespaces the counters (unknown-secret probes vs. signups) so
+    # they don't spend each other's budget.
 
-    def record_miss(self, ip: str, window: float) -> None:
+    def record_event(self, bucket: str, ip: str, window: float) -> None:
         now = time.time()
         with self._conn() as conn:
-            conn.execute("DELETE FROM misses WHERE ts < ?", (now - window,))
-            conn.execute("INSERT INTO misses (ip, ts) VALUES (?, ?)", (ip, now))
+            # Prune only this bucket's expired rows: windows differ per bucket,
+            # so a short-window bucket must not evict a long-window one's rows.
+            conn.execute(
+                "DELETE FROM rate_events WHERE bucket = ? AND ts < ?",
+                (bucket, now - window),
+            )
+            conn.execute(
+                "INSERT INTO rate_events (bucket, ip, ts) VALUES (?, ?, ?)",
+                (bucket, ip, now),
+            )
 
-    def miss_count(self, ip: str, window: float) -> int:
+    def event_count(self, bucket: str, ip: str, window: float) -> int:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) AS n FROM misses WHERE ip = ? AND ts >= ?",
-                (ip, time.time() - window),
+                "SELECT COUNT(*) AS n FROM rate_events"
+                " WHERE bucket = ? AND ip = ? AND ts >= ?",
+                (bucket, ip, time.time() - window),
             ).fetchone()
         return row["n"]
 
