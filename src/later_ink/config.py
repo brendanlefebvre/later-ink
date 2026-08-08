@@ -101,6 +101,36 @@ def get_stats_retention_days() -> int:
     return days if days >= 0 else 90
 
 
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+def get_feed_rate_limit() -> int:
+    """Catalog/feed requests allowed per minute per IP. 0 disables.
+
+    Generous by default: a single e-reader browsing folders and pulling a book
+    makes a handful of requests, so this only catches something hammering the
+    upstream API. Worth raising on a self-hosted instance where several devices
+    share one address behind NAT."""
+    return _int_env("RATE_LIMIT_FEED_PER_MIN", 60)
+
+
+def get_signup_rate_limit() -> int:
+    """/start requests allowed per hour per IP. 0 disables.
+
+    Covers both the form and the submission, so a real signup — including
+    retyping a rejected token a few times — stays well under it, while bulk
+    user creation and Stripe-verification hammering do not."""
+    return _int_env("RATE_LIMIT_SIGNUP_PER_HOUR", 20)
+
+
 def get_wallabag_config() -> dict[str, str] | None:
     """Self-host Wallabag connector settings, or None if not fully configured.
 

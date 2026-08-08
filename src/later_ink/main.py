@@ -20,7 +20,7 @@ from .connectors.readwise import ReadwiseConnector
 from .connectors.wallabag import WallabagConnector
 from .epub import build_epub
 from .payments import verify_checkout_session
-from .ratelimit import MissLimiter
+from .ratelimit import DurableLimiter, MemoryLimiter
 from .store import RESERVED_PATHS, Store
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,10 @@ ACQ_MEDIA = "application/atom+xml;profile=opds-catalog;kind=acquisition"
 OPENSEARCH_MEDIA = "application/opensearchdescription+xml"
 
 MAX_TENANT_CONNECTORS = 200
+
+# Longest rate-limit window in use, and so the age past which a rate-limit row
+# is certainly dead regardless of which bucket it came from.
+RATE_EVENT_MAX_AGE = 3600.0
 
 # Single-user (self-host) connectors, keyed by connector name
 _connectors: dict[str, Connector] = {}
@@ -98,7 +102,24 @@ async def lifespan(app: FastAPI):
             "single-user self-hosting, which stores no tokens; set it before "
             "enabling signups."
         )
-    app.state.limiter = MissLimiter(app.state.store, limit=20, window=3600.0)
+    # Rate-limit rows are IP addresses with no purpose past their window, and
+    # they're only pruned when a later event lands in the same bucket. Sweeping
+    # at startup bounds how long an instance that went quiet can hold them.
+    app.state.store.prune_rate_events(RATE_EVENT_MAX_AGE)
+    # Unknown-secret probes and signups both need to survive a cold start, so
+    # they're durable; feed traffic is throttled in-process — see ratelimit.py.
+    app.state.limiter = DurableLimiter(
+        app.state.store, bucket="miss", limit=20, window=3600.0
+    )
+    app.state.signup_limiter = DurableLimiter(
+        app.state.store,
+        bucket="signup",
+        limit=config.get_signup_rate_limit(),
+        window=3600.0,
+    )
+    app.state.feed_limiter = MemoryLimiter(
+        limit=config.get_feed_rate_limit(), window=60.0
+    )
     token = config.get_readwise_token()
     if token:
         _connectors["readwise"] = ReadwiseConnector(token, config.get_readwise_categories())
@@ -141,6 +162,51 @@ def _is_https(request: Request) -> bool:
         if proto:
             return proto.split(",")[0].strip() == "https"
     return request.url.scheme == "https"
+
+
+_RETRY_AFTER_FEED = "60"
+_RETRY_AFTER_SIGNUP = "3600"
+
+
+def _too_many(retry_after: str) -> Response:
+    # Plain text with Retry-After: KOReader surfaces the body on a failed
+    # download, and a polite client can back off instead of retrying blind.
+    return Response(
+        content="Too many requests; try again later\n",
+        status_code=429,
+        media_type="text/plain",
+        headers={"Retry-After": retry_after},
+    )
+
+
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    """Throttle signups and catalog traffic per IP.
+
+    Applied here rather than per-handler so a route added later is covered by
+    default — the same reason the cache policy below works off an allowlist.
+    Public paths (landing, assets, health) are exempt: they touch no upstream
+    and serving them is the point.
+
+    Note this is deliberately not the defence against guessing catalog
+    secrets. That one lives in _resolve_secret, because it can only count a
+    request *after* the lookup has shown the secret was wrong.
+    """
+    path = request.url.path
+    if _is_public(path):
+        return await call_next(request)
+
+    ip = _client_ip(request)
+    if path == "/start":
+        limiter: DurableLimiter = app.state.signup_limiter
+        # One transaction decides and records: a burst of concurrent signups
+        # must not all pass a separate check before any of them counts.
+        if not limiter.try_record(ip):
+            return _too_many(_RETRY_AFTER_SIGNUP)
+    elif not app.state.feed_limiter.allow(ip):
+        return _too_many(_RETRY_AFTER_FEED)
+
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -207,13 +273,20 @@ def _resolve_secret(secret: str, request: Request) -> str:
     """Map a URL secret to a Readwise token, rate-limiting unknown-secret probes."""
     if secret in RESERVED_PATHS:
         raise HTTPException(404)
-    limiter: MissLimiter = app.state.limiter
+    limiter: DurableLimiter = app.state.limiter
     ip = _client_ip(request)
+    # Cheap pre-check: skip the lookup for an IP that's already over. Racy by
+    # nature, which is fine — it only decides whether to do work early. It also
+    # covers a *correct* secret, so brute-forcing one doesn't become usable the
+    # moment it's found.
     if limiter.blocked(ip):
         raise HTTPException(429, "Too many attempts; try again later")
     token = app.state.store.get_token(secret)
     if token is None:
-        limiter.record_miss(ip)
+        # The accounting, though, is the atomic one: this is what actually
+        # bounds how many guesses a burst of concurrent probes can spend.
+        if not limiter.try_record(ip):
+            raise HTTPException(429, "Too many attempts; try again later")
         raise HTTPException(404, "Unknown catalog")
     return token
 
