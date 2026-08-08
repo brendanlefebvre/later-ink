@@ -50,8 +50,11 @@ jobs:
           python-version: "3.12"
       # Audits the lockfile directly rather than an installed environment, so
       # pip-audit's own dependencies can't perturb the versions being audited.
-      # --no-deps because the lock is already fully transitive.
+      # No --no-deps: because the lock is fully hashed, pip-audit skips
+      # dependency resolution anyway, and it additionally checks that every
+      # entry carries a hash — so regenerating the lock without
+      # --generate-hashes fails here instead of passing quietly.
       # A lockfile freezes CVEs in place as surely as it freezes versions, so
       # this job is what turns a stale pin into a visible failure.
       - run: python -m pip install pip-audit
-      - run: pip-audit --progress-spinner off --no-deps -r requirements-dev.txt
+      - run: pip-audit --progress-spinner off -r requirements-dev.txt
