@@ -114,11 +114,21 @@ def test_scan_stops_examining_items_at_the_scan_limit():
     assert cursor is not None
 
 
-def test_scan_survives_a_malformed_cursor_by_starting_over():
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        "not-a-cursor",  # unparseable
+        "-3|x",  # before the start
+        "999|stale",  # past the end: forged, or issued before the sources changed
+    ],
+)
+def test_scan_survives_a_bad_cursor_by_starting_over(cursor):
+    # Every unusable cursor restarts. An out-of-range one must not fall through
+    # to an empty result, which a reader can't tell from "this view is empty".
     c = PagedConnector({"a": [[_article("1")]]})
-    found, cursor = asyncio.run(c.scan_articles(lambda a: True, ["a"], "not-a-cursor"))
+    found, next_cursor = asyncio.run(c.scan_articles(lambda a: True, ["a"], cursor))
     assert [a.id for a in found] == ["1"]
-    assert cursor is None
+    assert next_cursor is None
 
 
 def test_scan_cursor_round_trips_an_upstream_cursor_containing_the_separator():

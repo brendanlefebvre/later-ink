@@ -156,7 +156,7 @@ src/later_ink/
 
 Readwise and [Wallabag](https://wallabag.org/) are supported today (set the
 `WALLABAG_*` vars in `.env.example` to enable Wallabag). More connectors
-(Instapaper) are planned — the connector interface is three methods.
+(Instapaper) are planned — the connector interface is three required methods.
 
 ## Development
 

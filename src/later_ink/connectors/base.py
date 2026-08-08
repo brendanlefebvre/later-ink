@@ -78,14 +78,22 @@ def _encode_scan_cursor(folder_index: int, page: str | None) -> str:
 
 
 def _decode_scan_cursor(cursor: str | None) -> tuple[int, str | None]:
+    """Inverse of _encode_scan_cursor; (0, None) — start over — if unusable.
+
+    An unusable folder index discards the upstream page along with it: half a
+    cursor is not better than none, since resuming a fresh folder from a page
+    belonging to some other one is how you skip items silently.
+    """
     if not cursor:
         return 0, None
     index, _, page = cursor.partition("|")
     try:
         folder_index = int(index)
     except ValueError:
-        return 0, None  # malformed (or a cursor from an older release) — restart
-    return max(folder_index, 0), page or None
+        return 0, None  # malformed (or a cursor from an older release)
+    if folder_index < 0:
+        return 0, None
+    return folder_index, page or None
 
 
 class Connector(ABC):
@@ -146,6 +154,12 @@ class Connector(ABC):
         VIEW_* caps.
         """
         folder_index, page = _decode_scan_cursor(cursor)
+        if folder_index >= len(folder_ids):
+            # Past the end: a cursor forged by hand, or a real one issued before
+            # the source folders changed under it. Restart rather than return an
+            # empty list, which would read as "this view is empty".
+            folder_index, page = 0, None
+
         matched: list[Article] = []
         seen: set[str] = set()
         scanned = fetched = 0
