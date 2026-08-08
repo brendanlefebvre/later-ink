@@ -1,0 +1,4 @@
+# PEP 517 build backend, from [build-system].requires in pyproject.toml.
+# Compiled to requirements-build.txt so the backend is pinned and hashed like
+# everything else, rather than resolved fresh at build time. See README.md.
+hatchling

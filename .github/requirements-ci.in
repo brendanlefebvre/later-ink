@@ -1,0 +1,4 @@
+# Tooling the workflows run, as opposed to anything the project imports.
+# Compiled to requirements-ci.txt. See README.md for the regenerate command.
+build
+pip-audit

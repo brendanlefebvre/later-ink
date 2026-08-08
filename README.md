@@ -129,7 +129,7 @@ src/later_ink/
   covers.py        # generated EPUB covers (hero image + typographic fallback)
   store.py         # SQLite user store + word-based secret URLs
   words.py         # wordlist behind the secret URLs (e-ink-typeable words)
-  ratelimit.py     # per-IP throttle for unknown-secret probes
+  ratelimit.py     # per-IP throttles: unknown-secret probes, signups, feeds
   pages.py         # server-rendered HTML pages
   payments.py      # Stripe verification (optional; inactive unless configured)
   connectors/
@@ -152,22 +152,42 @@ pytest
 
 `pyproject.toml` keeps loose `>=` ranges, which is what anyone installing
 Later.ink from PyPI resolves against. CI and the Docker image instead install
-from `requirements.txt` / `requirements-dev.txt`, which pin every transitive
-dependency with hashes, so a release is built from the versions that were
-actually tested. Regenerate them after changing a dependency:
+from pinned, hashed lockfiles, so a release is built from the versions that
+were actually tested. There are four, covering each layer:
+
+| file | contents | used by |
+|---|---|---|
+| `requirements.txt` | runtime dependencies | the image, and the base for the others |
+| `requirements-dev.txt` | runtime + `dev` extra | CI test job |
+| `requirements-build.txt` | the PEP 517 backend (`hatchling`) | every step that builds the project |
+| `.github/requirements-ci.txt` | workflow tooling (`build`, `pip-audit`) | CI and release jobs |
+
+Regenerate after changing a dependency:
 
 ```bash
 uv pip compile pyproject.toml --universal --generate-hashes \
   --python-version 3.11 -o requirements.txt
 uv pip compile pyproject.toml --extra dev --universal --generate-hashes \
   --python-version 3.11 -o requirements-dev.txt
+uv pip compile requirements-build.in --universal --generate-hashes \
+  --python-version 3.11 -o requirements-build.txt
+uv pip compile .github/requirements-ci.in --universal --generate-hashes \
+  --python-version 3.11 -o .github/requirements-ci.txt
 ```
+
+The last two exist because a PEP 517 build normally resolves its backend into a
+throwaway environment, unpinned and unhashed — outside every other guarantee
+here. Pinning it means passing `--no-build-isolation` (pip) or `--no-isolation`
+(`build`) wherever the project is built, so the pinned backend is used instead
+of a freshly fetched one. The Dockerfile builds a wheel in a first stage for the
+same reason: without build isolation the backend would otherwise remain
+installed in the shipped image.
 
 `--universal` keeps one file valid for both image architectures;
 `--python-version 3.11` matches the project's floor rather than whichever
-interpreter you happen to be running. The `audit` CI job runs `pip-audit`
-against the lock — pinning freezes known vulnerabilities in place as surely as
-it freezes versions, so that job is what makes a stale pin visible.
+interpreter you happen to be running. The `audit` CI job runs `pip-audit` against
+all four locks — pinning freezes known vulnerabilities in place as surely as it
+freezes versions, so that job is what makes a stale pin visible.
 
 ## Credits
 
