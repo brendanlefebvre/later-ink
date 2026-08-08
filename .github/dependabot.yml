@@ -1,0 +1,38 @@
+version: 2
+
+# Actions only, deliberately.
+#
+# The point of this file is to make SHA-pinned actions maintainable. A pin with
+# nothing to bump it goes stale, and a stale pin is its own risk — which is why
+# pinning was declined twice before this existed. Dependabot understands a
+# SHA-pinned `uses:` and updates both the hash and the trailing version comment,
+# so the pins stay current without anyone resolving hashes by hand.
+#
+# Python is not here on purpose. requirements.txt / requirements-dev.txt are
+# hash-pinned output from `uv pip compile` run against pyproject.toml, which
+# falls between Dependabot's two Python ecosystems: its pip-compile support is
+# built around a requirements.in source file (we have none), and its native uv
+# ecosystem expects a uv.lock from uv's project mode (we use the pip-compatible
+# mode). Pointing it at these files invites PRs with missing or wrong hashes.
+#
+# That gap is covered rather than ignored: the audit job in ci.yml runs
+# pip-audit --require-hashes against the lock on every pull request and every
+# release, so a dependency picking up a CVE fails visibly. What is not
+# automated is routine version freshness; regenerate the lock by hand with the
+# commands in README.md. Automating that properly means converting to a real
+# uv.lock and exporting a pip-installable requirements.txt from it — a bigger
+# change than this file should smuggle in.
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    groups:
+      # One PR per ecosystem rather than eight. These move together, they're
+      # all first-party GitHub or Docker actions, and CI proves them as a set.
+      actions:
+        patterns:
+          - "*"
