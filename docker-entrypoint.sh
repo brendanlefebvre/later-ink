@@ -22,11 +22,14 @@ APP_USER=app
 # itself (store.py), so this has to cover the unmounted case as well as the
 # mounted one. Derived from the same variable the app reads rather than
 # hardcoded to /data, or a custom DATABASE_PATH silently gets no chown.
+#
+# Every path-taking command below gets a -- terminator: a DATABASE_PATH whose
+# first character is a dash would otherwise be parsed as options.
 DATABASE_PATH="${DATABASE_PATH:-./data/app.db}"
-DATA_DIR="$(dirname "$DATABASE_PATH")"
+DATA_DIR="$(dirname -- "$DATABASE_PATH")"
 
 if [ "$(id -u)" = "0" ]; then
-    mkdir -p "$DATA_DIR"
+    mkdir -p -- "$DATA_DIR"
     # Resolve before doing anything with it, so a relative path or one with a
     # .. in it is the same path here as the app will open. -P also means no
     # component of what follows is a symlink.
@@ -58,10 +61,10 @@ if [ "$(id -u)" = "0" ]; then
     # also makes the -e test's race harmless: whatever is there at chown time
     # gets its own ownership changed and nothing else does. The directory needs
     # no -h, since resolving it above left it free of symlink components.
-    DB_FILE="$DATA_DIR/$(basename "$DATABASE_PATH")"
-    chown "$APP_USER:$APP_USER" "$DATA_DIR"
+    DB_FILE="$DATA_DIR/$(basename -- "$DATABASE_PATH")"
+    chown -- "$APP_USER:$APP_USER" "$DATA_DIR"
     for db_file in "$DB_FILE" "$DB_FILE-wal" "$DB_FILE-shm" "$DB_FILE-journal"; do
-        [ ! -e "$db_file" ] || chown -h "$APP_USER:$APP_USER" "$db_file"
+        [ ! -e "$db_file" ] || chown -h -- "$APP_USER:$APP_USER" "$db_file"
     done
 
     # setpriv comes from util-linux, already in the Debian base image — no
