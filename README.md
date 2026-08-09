@@ -145,7 +145,7 @@ src/later_ink/
   covers.py        # generated EPUB covers (hero image + typographic fallback)
   store.py         # SQLite user store + word-based secret URLs
   words.py         # wordlist behind the secret URLs (e-ink-typeable words)
-  ratelimit.py     # per-IP throttle for unknown-secret probes
+  ratelimit.py     # per-IP throttles: unknown-secret probes, signups, feeds
   pages.py         # server-rendered HTML pages
   payments.py      # Stripe verification (optional; inactive unless configured)
   connectors/
@@ -168,22 +168,88 @@ pytest
 
 `pyproject.toml` keeps loose `>=` ranges, which is what anyone installing
 Later.ink from PyPI resolves against. CI and the Docker image instead install
-from `requirements.txt` / `requirements-dev.txt`, which pin every transitive
-dependency with hashes, so a release is built from the versions that were
-actually tested. Regenerate them after changing a dependency:
+from pinned, hashed lockfiles, so a release is built from the versions that
+were actually tested. There are four, covering each layer:
+
+| file | contents | used by |
+|---|---|---|
+| `requirements.txt` | runtime dependencies | the image, and the base for the others |
+| `requirements-dev.txt` | runtime + `dev` extra | CI test job |
+| `requirements-build.txt` | the PEP 517 backend (`hatchling`) | every step that builds the project |
+| `.github/requirements-ci.txt` | workflow tooling (`build`, `pip-audit`) | CI and release jobs |
+
+Regenerate after changing a dependency:
 
 ```bash
 uv pip compile pyproject.toml --universal --generate-hashes \
   --python-version 3.11 -o requirements.txt
 uv pip compile pyproject.toml --extra dev --universal --generate-hashes \
   --python-version 3.11 -o requirements-dev.txt
+uv pip compile requirements-build.in --universal --generate-hashes \
+  --python-version 3.11 -o requirements-build.txt
+uv pip compile .github/requirements-ci.in --universal --generate-hashes \
+  --python-version 3.11 -o .github/requirements-ci.txt
 ```
+
+The last two exist because a PEP 517 build normally resolves its backend into a
+throwaway environment, unpinned and unhashed — outside every other guarantee
+here. Pinning it means passing `--no-build-isolation` (pip) or `--no-isolation`
+(`build`) wherever the project is built, so the pinned backend is used instead
+of a freshly fetched one. The Dockerfile builds a wheel in a first stage for the
+same reason: without build isolation the backend would otherwise remain
+installed in the shipped image.
+
+### Verifying the image locally
+
+The release workflow builds `linux/amd64` and `linux/arm64`, so a plain
+`docker build` on one machine only exercises half of what ships. A missing
+wheel for the other architecture shows up nowhere else — CI does not build the
+image, only the release tag does.
+
+```bash
+docker build -t later-ink:test .
+
+# Both release architectures. Docker's default driver cannot do multi-platform,
+# so this needs a builder with a different driver; --builder targets it for the
+# one command instead of changing your default. (Alternatively, enable the
+# containerd image store in Docker/OrbStack settings and the default driver
+# handles it natively, making the create/rm unnecessary.)
+docker buildx create --name later-ink-test
+docker buildx build --builder later-ink-test \
+  --platform linux/amd64,linux/arm64 --output=type=cacheonly .
+docker buildx rm later-ink-test
+```
+
+`--output=type=cacheonly` builds without producing an image; the exit code is
+the answer. Watch for either build dropping into a *source compile* of `lxml`,
+`pillow` or `cryptography` — that may mean no wheel exists for that platform and
+Python version, or that the lock carries no hash for the one that does. Either
+way it wants investigating with `--progress=plain` to see what the resolver
+chose. A healthy build downloads wheels and takes seconds per package.
+
+Two properties worth checking on the built image:
+
+```bash
+# The build backend must not have shipped: absent is the healthy result.
+docker run --rm later-ink:test pip list | grep -qi hatchling \
+  && echo "FAIL: build backend shipped in the runtime image" \
+  || echo "ok: build backend absent"
+
+# Spot-check a few runtime pins against requirements.txt.
+docker run --rm later-ink:test pip list | grep -Ei 'fastapi|lxml|pillow'
+```
+
+The first is the multi-stage property: `grep` exits non-zero when it finds
+nothing, so the explicit branch makes the healthy case unambiguous. The second
+is a spot check rather than proof — for the full comparison, diff
+`docker run --rm later-ink:test pip freeze` against the pins in
+`requirements.txt`.
 
 `--universal` keeps one file valid for both image architectures;
 `--python-version 3.11` matches the project's floor rather than whichever
-interpreter you happen to be running. The `audit` CI job runs `pip-audit`
-against the lock — pinning freezes known vulnerabilities in place as surely as
-it freezes versions, so that job is what makes a stale pin visible.
+interpreter you happen to be running. The `audit` CI job runs `pip-audit` against
+all four locks — pinning freezes known vulnerabilities in place as surely as it
+freezes versions, so that job is what makes a stale pin visible.
 
 ## Credits
 

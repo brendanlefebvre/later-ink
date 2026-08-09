@@ -8,20 +8,27 @@ version: 2
 # SHA-pinned `uses:` and updates both the hash and the trailing version comment,
 # so the pins stay current without anyone resolving hashes by hand.
 #
-# Python is not here on purpose. requirements.txt / requirements-dev.txt are
-# hash-pinned output from `uv pip compile` run against pyproject.toml, which
-# falls between Dependabot's two Python ecosystems: its pip-compile support is
-# built around a requirements.in source file (we have none), and its native uv
-# ecosystem expects a uv.lock from uv's project mode (we use the pip-compatible
-# mode). Pointing it at these files invites PRs with missing or wrong hashes.
+# The Python entry below is scoped to /.github deliberately, and the scoping is
+# load-bearing rather than tidiness. Dependabot's pip ecosystem matches broadly
+# — it scans *.txt and inspects contents to decide what is a manifest — so an
+# entry rooted at / would also try to update requirements.txt,
+# requirements-dev.txt and requirements-build.txt. Those are hash-pinned output
+# from `uv pip compile`, which falls between Dependabot's two Python
+# ecosystems: its pip-compile support expects a requirements.in source, and its
+# native uv ecosystem expects a uv.lock from uv's project mode rather than the
+# pip-compatible mode used here. Pointing it at them invites pull requests with
+# missing or wrong hashes.
 #
-# That gap is covered rather than ignored: the audit job in ci.yml runs
-# pip-audit --require-hashes against the lock on every pull request and every
-# release, so a dependency picking up a CVE fails visibly. What is not
-# automated is routine version freshness; regenerate the lock by hand with the
-# commands in README.md. Automating that properly means converting to a real
-# uv.lock and exporting a pip-installable requirements.txt from it — a bigger
-# change than this file should smuggle in.
+# .github/requirements-ci.txt does have a .in source, which is the shape
+# Dependabot's pip-compile support is built for, so it is the one Python file
+# here it stands a good chance of maintaining correctly. Treat that as unproven
+# until a pull request actually arrives: if none does, or one arrives with
+# broken hashes, drop this entry and bump the file by hand.
+#
+# The files left unautomated are not left unchecked. The audit job runs
+# pip-audit --require-hashes over every lockfile on each pull request and
+# release, so a dependency picking up a CVE fails visibly. What stays manual is
+# routine version freshness; the regenerate commands are in README.md.
 updates:
   - package-ecosystem: github-actions
     directory: "/"
@@ -34,5 +41,19 @@ updates:
       # One PR per ecosystem rather than eight. These move together, they're
       # all first-party GitHub or Docker actions, and CI proves them as a set.
       actions:
+        patterns:
+          - "*"
+
+  # CI tooling only — build and pip-audit. See the note above on why this is
+  # scoped to /.github and why no entry covers the repository root.
+  - package-ecosystem: pip
+    directory: "/.github"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    groups:
+      ci-tooling:
         patterns:
           - "*"

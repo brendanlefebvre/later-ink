@@ -1,4 +1,5 @@
-# The Dockerfile only COPYs requirements.txt, pyproject.toml, README.md, and src/.
+# The Dockerfile only COPYs requirements.txt, requirements-build.txt,
+# pyproject.toml, README.md, and src/.
 # Everything else is dead weight in the build context (uploaded to the
 # builder on every deploy) — exclude it.
 
@@ -27,6 +28,8 @@ docker-compose.yml
 fly.toml
 .claude/
 
-# Locked dev dependencies are for CI, not the image (only requirements.txt
-# is COPYed), so keep them out of the build context.
+# Lock inputs and the dev/CI locks are not COPYed by the Dockerfile, so keep
+# them out of the build context. requirements.txt and requirements-build.txt
+# are COPYed and must NOT be listed here.
 requirements-dev.txt
+*.in
