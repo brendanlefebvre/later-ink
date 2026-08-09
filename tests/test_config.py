@@ -47,6 +47,30 @@ def test_no_file_is_a_noop(env_dir):
     assert config.load_env_file() is None
 
 
+def test_unreadable_candidate_falls_through(env_dir, monkeypatch, tmp_path):
+    """An unstattable path must not take the app down at import.
+
+    The container runs unprivileged with HOME inherited from root, so the XDG
+    candidate can sit under a directory this process may not traverse.
+    Patched rather than chmod'ed so the test means the same thing when the
+    suite runs as root, which it does inside the image.
+    """
+    monkeypatch.delenv("READWISE_TOKEN", raising=False)
+    (tmp_path / ".env").write_text("READWISE_TOKEN=from-dotenv\n")
+
+    real_is_file = type(tmp_path).is_file
+
+    def deny_xdg(self):
+        if "later-ink" in str(self):
+            raise PermissionError(13, "Permission denied")
+        return real_is_file(self)
+
+    monkeypatch.setattr(type(tmp_path), "is_file", deny_xdg)
+
+    assert config.load_env_file() == tmp_path / ".env"
+    assert os.environ["READWISE_TOKEN"] == "from-dotenv"
+
+
 def test_parsing_skips_comments_blanks_and_strips_quotes(env_dir, monkeypatch):
     for key in ("READWISE_TOKEN", "BASE_URL", "STATS_TOKEN"):
         monkeypatch.delenv(key, raising=False)

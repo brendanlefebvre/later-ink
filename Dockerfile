@@ -65,9 +65,19 @@ RUN pip install --no-cache-dir --no-deps /tmp/*.whl && rm -rf /tmp/*.whl
 # is skipped entirely when the image is run with an explicit non-root --user,
 # and uid 10001 cannot create a directory under /app on its own.
 RUN groupadd --gid 10001 app \
-    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app \
+    && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/app \
+        --shell /usr/sbin/nologin app \
     && mkdir -p /app/data \
     && chown app:app /app/data
+
+# Docker sets HOME=/root when an image declares no USER, and setpriv does not
+# rewrite the environment — its --reset-env clears the whole environment, which
+# would take DATABASE_PATH and the tokens with it. So without this the app runs
+# unprivileged while HOME still names root's 0700 home directory, and the XDG
+# config lookup in config.py dies on the permission error before serving
+# anything. The home directory is created above so the lookup finds a real
+# path rather than a missing one.
+ENV HOME=/home/app
 
 # No USER instruction, deliberately: the entrypoint has to start as root to
 # chown the volume mounted over /data, and drops to `app` itself before exec'ing
