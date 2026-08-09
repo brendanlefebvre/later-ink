@@ -59,8 +59,15 @@ RUN pip install --no-cache-dir --no-deps /tmp/*.whl && rm -rf /tmp/*.whl
 # a mounted volume inspected from the host, and it has to survive an image
 # rebuild or an existing volume stops matching the user that has to write it.
 # 10001 is above Debian's system range and unused in the base image.
+#
+# /app/data is created here because the app's default DATABASE_PATH is
+# ./data/app.db and WORKDIR is root-owned. The entrypoint would fix that, but it
+# is skipped entirely when the image is run with an explicit non-root --user,
+# and uid 10001 cannot create a directory under /app on its own.
 RUN groupadd --gid 10001 app \
-    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app/data \
+    && chown app:app /app/data
 
 # No USER instruction, deliberately: the entrypoint has to start as root to
 # chown the volume mounted over /data, and drops to `app` itself before exec'ing

@@ -12,7 +12,6 @@
 set -eu
 
 APP_USER=app
-APP_UID=10001
 
 # The app defaults to ./data/app.db relative to WORKDIR and creates the parent
 # itself (store.py), so this has to cover the unmounted case as well as the
@@ -23,15 +22,32 @@ DATA_DIR="$(dirname "$DATABASE_PATH")"
 
 if [ "$(id -u)" = "0" ]; then
     mkdir -p "$DATA_DIR"
+    # Resolve before doing anything with it, so a relative path or one with a
+    # .. in it is the same path here as the app will open.
+    DATA_DIR="$(cd "$DATA_DIR" && pwd -P)"
 
-    # Conditional rather than an unconditional recursive walk. The contents are
-    # a SQLite file plus its WAL, so the walk is cheap here, but it runs on
-    # every start and its cost scales with whatever else lands on the volume.
-    # The directory's own owner is the signal: it is what the mount sets, and
-    # what a previous start would already have corrected.
-    if [ "$(stat -c %u "$DATA_DIR")" != "$APP_UID" ]; then
-        chown -R "$APP_USER:$APP_USER" "$DATA_DIR"
+    # DATABASE_PATH=/app.db would otherwise put the whole filesystem in scope
+    # below. Refuse rather than proceed: 78 is EX_CONFIG, and this is one.
+    if [ "$DATA_DIR" = "/" ]; then
+        echo "docker-entrypoint: DATABASE_PATH must sit in a directory, not at /" >&2
+        exit 78
     fi
+
+    # Named paths rather than a recursive walk. The walk was cheap here — the
+    # directory holds a SQLite database and its sidecars and nothing else
+    # writes there — but its cost would scale with whatever later lands on the
+    # volume, and rooted at an unexpected DATA_DIR it is a large mistake to
+    # make on every start.
+    #
+    # Not conditional on the directory's owner either: the directory is a poor
+    # proxy for the files in it. Restoring a backup as root leaves an app-owned
+    # directory holding a root-owned database, which the app still cannot open.
+    # WAL is on (store.py), and -journal covers the rollback-mode fallback.
+    DB_FILE="$DATA_DIR/$(basename "$DATABASE_PATH")"
+    chown "$APP_USER:$APP_USER" "$DATA_DIR"
+    for db_file in "$DB_FILE" "$DB_FILE-wal" "$DB_FILE-shm" "$DB_FILE-journal"; do
+        [ ! -e "$db_file" ] || chown "$APP_USER:$APP_USER" "$db_file"
+    done
 
     # setpriv comes from util-linux, already in the Debian base image — no
     # gosu or su-exec to install and keep pinned. --init-groups gives the

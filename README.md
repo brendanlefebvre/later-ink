@@ -218,11 +218,18 @@ rewrites the tag and the digest together. To bump one by hand instead:
 docker buildx imagetools inspect python:3.12-slim | grep Digest
 ```
 
-Nothing in CI checks that a pinned digest still matches the tag written beside
-it, and it cannot: the registry untags a digest as soon as the tag moves on, so
-a correct pin stops being reachable by its own tag within days. What *is*
-worth checking, when a pin changes, is that the digest is a real image of the
-series it claims:
+Nothing in CI compares a pinned digest against the tag written beside it, and
+the distinction matters: such a check would measure *staleness*, not
+correctness. When upstream rebuilds `python:3.12-slim` the tag moves to the new
+image; the pinned digest stays pullable, it simply stops being what the tag
+names. So a CI job comparing the two would go red on every correct pin the day
+after a rebuild, and the only way to green it is to bump — which is Dependabot's
+job, on its own schedule, rewriting tag and digest together. It would also put a
+Docker Hub call on every CI run, against anonymous pull limits shared across
+runner IPs.
+
+The tag can therefore drift out of date, and it is worth checking when a pin
+changes that the digest is a real image of the series the tag claims:
 
 ```bash
 docker run --rm python:3.12-slim@sha256:<digest> python -V   # Python 3.12.x
@@ -232,7 +239,7 @@ docker run --rm python:3.12-slim@sha256:<digest> \
 
 ### Running as an unprivileged user
 
-The app runs as `app`, uid/gid **10001**, not root. The image has no `USER`
+`uvicorn` runs as `app`, uid/gid **10001**, not root. The image has no `USER`
 instruction, though, and that is deliberate: `fly.toml` mounts a volume at
 `/data` and Fly creates volumes root-owned, while `docker compose` bind-mounts
 `./data`, where ownership comes from the host. Either way the mount is laid over
@@ -240,17 +247,21 @@ the image's filesystem at runtime, so a build-time `chown` is invisible and a
 plain `USER app` yields a container that starts, cannot open its SQLite
 database, and takes the deployed instance down.
 
-`docker-entrypoint.sh` therefore starts as root, creates and (only when the
-owner is wrong) chowns the directory holding `DATABASE_PATH`, and drops
-privileges with `setpriv` before `exec`ing the app. `setpriv` is part of
-`util-linux` and already in the Debian base image, so this adds no package to
-install, pin, or audit. If you run the image with an explicit `--user` /
-compose `user:`, the entrypoint sees it is not root, skips both steps, and
-execs the app directly — the mount then has to already match that uid.
+`docker-entrypoint.sh` therefore starts as root, creates the directory holding
+`DATABASE_PATH`, takes ownership of it and of the SQLite database and its
+sidecars, and drops privileges with `setpriv` before `exec`ing the app.
+`setpriv` is part of `util-linux` and already in the Debian base image, so this
+adds no package to install, pin, or audit. Run the image with a *non-root*
+`--user` / compose `user:` and the entrypoint sees it is not root, skips both
+steps, and execs the app directly — the mount then has to already match that
+uid. (`--user root` or `--user 0:0` still takes the root path and still drops
+to `app`.)
 
 Image scanners flag the missing `USER` (Trivy `DS-0002`, Checkov
 `CKV_DOCKER_3`). The check is a heuristic on the instruction rather than on the
-process, and the process here is unprivileged.
+process, and the app process is unprivileged. One process genuinely is not:
+Docker runs `HEALTHCHECK` outside the entrypoint, so it stays root. It makes an
+HTTP request to the app's own port and needs nothing more.
 
 The fixed uid has one visible consequence locally: `./data` in a Compose
 checkout ends up owned by 10001 on the host, so inspecting or removing it wants
@@ -307,28 +318,41 @@ And the privilege drop, against a root-owned volume — the shape Fly presents,
 and the failure mode that would otherwise appear only as a crash loop after
 deploy:
 
+The last two commands **delete** the volume and container named here, so the
+names are deliberately ones nothing else would use — change them, don't reuse an
+existing volume, and note that the `chown -R 0:0` would rewrite whatever it
+found in one.
+
 ```bash
-docker volume create later-ink-test
-docker run --rm -v later-ink-test:/data alpine chown -R 0:0 /data
+vol=later-ink-privdrop-check
+ctr=later-ink-privdrop-check
 
-# Must start, create the database, and answer /healthz.
-docker run -d --name later-ink-check -p 8000:8000 \
-  -v later-ink-test:/data -e DATABASE_PATH=/data/app.db later-ink:test
-curl -fsS localhost:8000/healthz && echo
+docker volume create "$vol"
+docker run --rm -v "$vol":/data alpine chown -R 0:0 /data
 
-# The app must not be running as root, and the volume must have been fixed.
-docker top later-ink-check
-docker run --rm -v later-ink-test:/data alpine ls -ln /data
+# Must start, create the database, and answer /healthz. docker run -d returns
+# before uvicorn is listening, so poll rather than curling straight away.
+docker run -d --name "$ctr" -p 8000:8000 \
+  -v "$vol":/data -e DATABASE_PATH=/data/app.db later-ink:test
+for _ in $(seq 30); do curl -fsS localhost:8000/healthz && break; sleep 1; done
 
-docker rm -f later-ink-check && docker volume rm later-ink-test
+# uid 10001 against uvicorn, and no privilege left to regain.
+docker top "$ctr"
+docker exec "$ctr" grep -E '^(Uid|NoNewPrivs|CapInh):' /proc/1/status
+
+# The mount itself, not its contents: 10001 10001.
+docker run --rm -v "$vol":/data alpine ls -ldn /data
+
+docker rm -f "$ctr" && docker volume rm "$vol"
 ```
 
 `docker top` reads the process table on the host rather than in the container,
 which matters twice over: the base image has no `ps`, and `docker exec` would
 run as the image's user (root, since there is no `USER`) rather than as the
-process being checked. It should show uid 10001 against `uvicorn`, and `ls -ln`
-should show the same on `/data`. Worth re-running whenever the entrypoint or the
-base image changes.
+process being checked. Expect `10001` in its UID column, `Uid: 10001 10001 10001
+10001` and `NoNewPrivs: 1` from `/proc/1/status`, an all-zero `CapInh`, and
+`10001 10001` on `/data`. Worth re-running whenever the entrypoint or the base
+image changes.
 
 `--universal` keeps one file valid for both image architectures;
 `--python-version 3.11` matches the project's floor rather than whichever
