@@ -230,6 +230,33 @@ docker run --rm python:3.12-slim@sha256:<digest> \
   sh -c 'grep ^PRETTY /etc/os-release'                       # Debian
 ```
 
+### Running as an unprivileged user
+
+The app runs as `app`, uid/gid **10001**, not root. The image has no `USER`
+instruction, though, and that is deliberate: `fly.toml` mounts a volume at
+`/data` and Fly creates volumes root-owned, while `docker compose` bind-mounts
+`./data`, where ownership comes from the host. Either way the mount is laid over
+the image's filesystem at runtime, so a build-time `chown` is invisible and a
+plain `USER app` yields a container that starts, cannot open its SQLite
+database, and takes the deployed instance down.
+
+`docker-entrypoint.sh` therefore starts as root, creates and (only when the
+owner is wrong) chowns the directory holding `DATABASE_PATH`, and drops
+privileges with `setpriv` before `exec`ing the app. `setpriv` is part of
+`util-linux` and already in the Debian base image, so this adds no package to
+install, pin, or audit. If you run the image with an explicit `--user` /
+compose `user:`, the entrypoint sees it is not root, skips both steps, and
+execs the app directly — the mount then has to already match that uid.
+
+Image scanners flag the missing `USER` (Trivy `DS-0002`, Checkov
+`CKV_DOCKER_3`). The check is a heuristic on the instruction rather than on the
+process, and the process here is unprivileged.
+
+The fixed uid has one visible consequence locally: `./data` in a Compose
+checkout ends up owned by 10001 on the host, so inspecting or removing it wants
+`sudo`. The comment in `docker-compose.yml` gives the `user:` line that avoids
+it.
+
 ### Verifying the image locally
 
 The release workflow builds `linux/amd64` and `linux/arm64`, so a plain
@@ -275,6 +302,33 @@ nothing, so the explicit branch makes the healthy case unambiguous. The second
 is a spot check rather than proof — for the full comparison, diff
 `docker run --rm later-ink:test pip freeze` against the pins in
 `requirements.txt`.
+
+And the privilege drop, against a root-owned volume — the shape Fly presents,
+and the failure mode that would otherwise appear only as a crash loop after
+deploy:
+
+```bash
+docker volume create later-ink-test
+docker run --rm -v later-ink-test:/data alpine chown -R 0:0 /data
+
+# Must start, create the database, and answer /healthz.
+docker run -d --name later-ink-check -p 8000:8000 \
+  -v later-ink-test:/data -e DATABASE_PATH=/data/app.db later-ink:test
+curl -fsS localhost:8000/healthz && echo
+
+# The app must not be running as root, and the volume must have been fixed.
+docker top later-ink-check
+docker run --rm -v later-ink-test:/data alpine ls -ln /data
+
+docker rm -f later-ink-check && docker volume rm later-ink-test
+```
+
+`docker top` reads the process table on the host rather than in the container,
+which matters twice over: the base image has no `ps`, and `docker exec` would
+run as the image's user (root, since there is no `USER`) rather than as the
+process being checked. It should show uid 10001 against `uvicorn`, and `ls -ln`
+should show the same on `/data`. Worth re-running whenever the entrypoint or the
+base image changes.
 
 `--universal` keeps one file valid for both image architectures;
 `--python-version 3.11` matches the project's floor rather than whichever

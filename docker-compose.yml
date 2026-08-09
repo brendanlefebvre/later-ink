@@ -12,6 +12,12 @@ services:
         required: false
     environment:
       - DATABASE_PATH=/data/app.db
+    # The container drops to uid 10001 and its entrypoint chowns this path to
+    # match, so ./data ends up owned by 10001 on the host. Inspecting or
+    # deleting it from the host then wants sudo. To keep your own ownership
+    # instead, add a `user: "1000:1000"` line here with your own `id -u`/`id -g`
+    # — the entrypoint sees it is not root, skips the chown, and runs as that
+    # uid directly against a directory you already own.
     volumes:
       - ./data:/data
     restart: unless-stopped

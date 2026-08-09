@@ -55,9 +55,28 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 COPY --from=builder /wheels/*.whl /tmp/
 RUN pip install --no-cache-dir --no-deps /tmp/*.whl && rm -rf /tmp/*.whl
 
+# A fixed uid/gid, not whatever useradd picks next. The number is what shows on
+# a mounted volume inspected from the host, and it has to survive an image
+# rebuild or an existing volume stops matching the user that has to write it.
+# 10001 is above Debian's system range and unused in the base image.
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app
+
+# No USER instruction, deliberately: the entrypoint has to start as root to
+# chown the volume mounted over /data, and drops to `app` itself before exec'ing
+# the app. Image scanners flag the missing USER (Trivy DS-0002, Checkov
+# CKV_DOCKER_3) — the container does not in fact run the app as root, and a
+# USER here would produce one that cannot open its database. See
+# docker-entrypoint.sh.
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 8000
 
+# Docker runs HEALTHCHECK outside the entrypoint, so this stays root; it only
+# makes an HTTP request to the app's own port and needs no more than that.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD python -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status == 200 else 1)"
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["uvicorn", "later_ink.main:app", "--host", "0.0.0.0", "--port", "8000"]
