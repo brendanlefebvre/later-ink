@@ -323,10 +323,12 @@ deploy:
 ```
 
 It creates a scratch volume, forces it root-owned, runs the image against it,
-and answers six questions: the container starts and serves `/healthz`, pid 1 is
-uid 10001, `no_new_privs` is set, inheritable capabilities are empty, the
-database was created, and `/data` itself — not merely the file in it — ends up
-owned by 10001. Each prints its own `ok:`/`FAIL:` verdict and the script exits
+and answers six questions: the container starts and serves `/healthz`, pid 1
+runs as uid and gid 10001 across all four identity fields of each (real,
+effective, saved and filesystem — a process holding an effective 0 would pass a
+check on the real uid alone), `no_new_privs` is set, inheritable capabilities
+are empty, the database was created, and `/data` itself — not merely the file
+in it — ends up owned by 10001. Each prints its own `ok:`/`FAIL:` verdict and the script exits
 non-zero if any failed, so it can gate a release rather than relying on someone
 reading a process table and spotting a wrong number. On failure it prints the
 container's last log lines, where an unopenable database shows up and nowhere

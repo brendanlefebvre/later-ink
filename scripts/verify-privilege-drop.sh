@@ -67,8 +67,13 @@ check "starts and answers /healthz" \
 # Matched inside the container so the pattern syntax is always GNU grep's,
 # whatever the host ships. docker exec runs as the image's user (root, since
 # there is no USER) and reads pid 1, which is the app itself.
-check "pid 1 runs as uid $APP_UID" \
-    docker exec "$ctr" grep -Eq "^Uid:[[:space:]]+$APP_UID" /proc/1/status
+# All four fields of each line, not just the first: Uid and Gid carry real,
+# effective, saved and filesystem ids, and a process that kept an effective or
+# filesystem identity of 0 would sail past a check on the real uid alone.
+ids="[[:space:]]+$APP_UID[[:space:]]+$APP_UID[[:space:]]+$APP_UID[[:space:]]+$APP_UID$"
+check "pid 1 runs as uid and gid $APP_UID, all four fields of each" \
+    docker exec "$ctr" sh -c \
+        "grep -Eq '^Uid:$ids' /proc/1/status && grep -Eq '^Gid:$ids' /proc/1/status"
 check "no_new_privs is set" \
     docker exec "$ctr" grep -Eq '^NoNewPrivs:[[:space:]]*1$' /proc/1/status
 check "inheritable capabilities are empty" \

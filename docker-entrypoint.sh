@@ -61,7 +61,19 @@ if [ "$(id -u)" = "0" ]; then
     # also makes the -e test's race harmless: whatever is there at chown time
     # gets its own ownership changed and nothing else does. The directory needs
     # no -h, since resolving it above left it free of symlink components.
-    DB_FILE="$DATA_DIR/$(basename -- "$DATABASE_PATH")"
+    # A trailing . or .. survives the check above — DATABASE_PATH=/data/..
+    # gives DATA_DIR=/data, which is fine, and DB_FILE=/data/.., which names /.
+    # -h does not help: .. is a real directory entry, not a symlink to refuse
+    # to follow. So the basename has to name a file.
+    DB_NAME="$(basename -- "$DATABASE_PATH")"
+    case "$DB_NAME" in
+        "" | "." | "..")
+            echo "docker-entrypoint: DATABASE_PATH must name a file, not a directory" >&2
+            exit 78
+            ;;
+    esac
+
+    DB_FILE="$DATA_DIR/$DB_NAME"
     chown -- "$APP_USER:$APP_USER" "$DATA_DIR"
     for db_file in "$DB_FILE" "$DB_FILE-wal" "$DB_FILE-shm" "$DB_FILE-journal"; do
         [ ! -e "$db_file" ] || chown -h -- "$APP_USER:$APP_USER" "$db_file"
