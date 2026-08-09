@@ -11,6 +11,11 @@
 # happen at runtime, as root, before the drop — which is what an entrypoint is.
 set -eu
 
+# A CDPATH inherited from the environment makes `cd` to a relative path both
+# print where it landed and potentially land somewhere else, either of which
+# corrupts the resolution below. Clear it rather than work around it.
+CDPATH=''
+
 APP_USER=app
 
 # The app defaults to ./data/app.db relative to WORKDIR and creates the parent
@@ -23,8 +28,9 @@ DATA_DIR="$(dirname "$DATABASE_PATH")"
 if [ "$(id -u)" = "0" ]; then
     mkdir -p "$DATA_DIR"
     # Resolve before doing anything with it, so a relative path or one with a
-    # .. in it is the same path here as the app will open.
-    DATA_DIR="$(cd "$DATA_DIR" && pwd -P)"
+    # .. in it is the same path here as the app will open. -P also means no
+    # component of what follows is a symlink.
+    DATA_DIR="$(cd -P -- "$DATA_DIR" && pwd -P)"
 
     # DATABASE_PATH=/app.db would otherwise put the whole filesystem in scope
     # below. Refuse rather than proceed: 78 is EX_CONFIG, and this is one.
@@ -43,10 +49,19 @@ if [ "$(id -u)" = "0" ]; then
     # proxy for the files in it. Restoring a backup as root leaves an app-owned
     # directory holding a root-owned database, which the app still cannot open.
     # WAL is on (store.py), and -journal covers the rollback-mode fallback.
+    #
+    # -h, because these are the one set of paths an already-compromised app
+    # process could have replaced. It owns this directory, so it can put a
+    # symlink where the database goes; a dereferencing chown would then hand it
+    # ownership of the link's target — this script, say — and root runs that on
+    # the next start. -h changes the link rather than what it points at, which
+    # also makes the -e test's race harmless: whatever is there at chown time
+    # gets its own ownership changed and nothing else does. The directory needs
+    # no -h, since resolving it above left it free of symlink components.
     DB_FILE="$DATA_DIR/$(basename "$DATABASE_PATH")"
     chown "$APP_USER:$APP_USER" "$DATA_DIR"
     for db_file in "$DB_FILE" "$DB_FILE-wal" "$DB_FILE-shm" "$DB_FILE-journal"; do
-        [ ! -e "$db_file" ] || chown "$APP_USER:$APP_USER" "$db_file"
+        [ ! -e "$db_file" ] || chown -h "$APP_USER:$APP_USER" "$db_file"
     done
 
     # setpriv comes from util-linux, already in the Debian base image — no

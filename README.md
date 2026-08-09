@@ -318,14 +318,15 @@ And the privilege drop, against a root-owned volume — the shape Fly presents,
 and the failure mode that would otherwise appear only as a crash loop after
 deploy:
 
-The last two commands **delete** the volume and container named here, so the
-names are deliberately ones nothing else would use — change them, don't reuse an
-existing volume, and note that the `chown -R 0:0` would rewrite whatever it
-found in one.
+The last line **deletes** the volume and container. Both names carry `$$`, the
+shell's pid, so a run cannot collide with an existing volume and recursively
+`chown` someone else's data — `docker volume create` reuses a volume of the same
+name rather than refusing. Paste the whole block into one shell so `$$` stays
+the same throughout.
 
 ```bash
-vol=later-ink-privdrop-check
-ctr=later-ink-privdrop-check
+vol=later-ink-privdrop-$$
+ctr=later-ink-privdrop-$$
 
 docker volume create "$vol"
 docker run --rm -v "$vol":/data alpine chown -R 0:0 /data
@@ -334,25 +335,40 @@ docker run --rm -v "$vol":/data alpine chown -R 0:0 /data
 # before uvicorn is listening, so poll rather than curling straight away.
 docker run -d --name "$ctr" -p 8000:8000 \
   -v "$vol":/data -e DATABASE_PATH=/data/app.db later-ink:test
-for _ in $(seq 30); do curl -fsS localhost:8000/healthz && break; sleep 1; done
+for _ in $(seq 30); do
+  curl -fsS --max-time 5 localhost:8000/healthz >/dev/null && break
+  sleep 1
+done
+curl -fsS --max-time 5 localhost:8000/healthz >/dev/null \
+  && echo "ok: healthy" || echo "FAIL: never became healthy"
 
-# uid 10001 against uvicorn, and no privilege left to regain.
+# uid 10001 against uvicorn, and no privilege left to regain. The matching
+# happens inside the container so it is always GNU grep, whatever the host has.
 docker top "$ctr"
 docker exec "$ctr" grep -E '^(Uid|NoNewPrivs|CapInh):' /proc/1/status
+docker exec "$ctr" grep -Eq '^Uid:[[:space:]]+10001' /proc/1/status \
+  && echo "ok: pid 1 is 10001" || echo "FAIL: pid 1 is not 10001"
+docker exec "$ctr" grep -Eq '^NoNewPrivs:[[:space:]]*1$' /proc/1/status \
+  && echo "ok: no_new_privs set" || echo "FAIL: no_new_privs not set"
+docker exec "$ctr" grep -Eq '^CapInh:[[:space:]]*0+$' /proc/1/status \
+  && echo "ok: inheritable caps empty" || echo "FAIL: inheritable caps present"
 
-# The mount itself, not its contents: 10001 10001.
-docker run --rm -v "$vol":/data alpine ls -ldn /data
+# The mount itself, not its contents.
+docker run --rm -v "$vol":/data alpine stat -c '%u:%g' /data \
+  | grep -qx '10001:10001' && echo "ok: /data owned by 10001" \
+  || echo "FAIL: /data not owned by 10001"
 
 docker rm -f "$ctr" && docker volume rm "$vol"
 ```
 
-`docker top` reads the process table on the host rather than in the container,
-which matters twice over: the base image has no `ps`, and `docker exec` would
-run as the image's user (root, since there is no `USER`) rather than as the
-process being checked. Expect `10001` in its UID column, `Uid: 10001 10001 10001
-10001` and `NoNewPrivs: 1` from `/proc/1/status`, an all-zero `CapInh`, and
-`10001 10001` on `/data`. Worth re-running whenever the entrypoint or the base
-image changes.
+Each check prints its own verdict rather than leaving you to read raw output,
+because a privilege regression that only shows up as a different number in a
+process table is exactly the kind that gets skimmed past. `docker top` is left
+printing for the eye: it reads the process table on the host rather than in the
+container, which matters twice over — the base image has no `ps`, and
+`docker exec` would run as the image's user (root, since there is no `USER`)
+rather than as the process being checked. Worth re-running whenever the
+entrypoint or the base image changes.
 
 `--universal` keeps one file valid for both image architectures;
 `--python-version 3.11` matches the project's floor rather than whichever
