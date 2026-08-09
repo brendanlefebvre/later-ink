@@ -199,6 +199,37 @@ of a freshly fetched one. The Dockerfile builds a wheel in a first stage for the
 same reason: without build isolation the backend would otherwise remain
 installed in the shipped image.
 
+### The base image pin
+
+The lockfiles stop at the Python layer. Both `FROM` lines in the `Dockerfile`
+are therefore pinned to the base image's **multi-architecture index digest**,
+not the mutable `python:3.12-slim` tag — otherwise the interpreter and the OS
+packages underneath every hash-pinned wheel are still whatever upstream last
+published. The index digest rather than a single platform's manifest is what
+keeps the `linux/amd64` + `linux/arm64` release build working.
+
+Freezing OS packages freezes their CVEs too, so the pin is only safe alongside
+something that refreshes it: Dependabot's `docker` ecosystem, weekly, which
+rewrites the tag and the digest together. To bump one by hand instead:
+
+```bash
+# The digest the tag currently points at. imagetools reads the registry
+# without downloading layers.
+docker buildx imagetools inspect python:3.12-slim | grep Digest
+```
+
+Nothing in CI checks that a pinned digest still matches the tag written beside
+it, and it cannot: the registry untags a digest as soon as the tag moves on, so
+a correct pin stops being reachable by its own tag within days. What *is*
+worth checking, when a pin changes, is that the digest is a real image of the
+series it claims:
+
+```bash
+docker run --rm python:3.12-slim@sha256:<digest> python -V   # Python 3.12.x
+docker run --rm python:3.12-slim@sha256:<digest> \
+  sh -c 'grep ^PRETTY /etc/os-release'                       # Debian
+```
+
 ### Verifying the image locally
 
 The release workflow builds `linux/amd64` and `linux/arm64`, so a plain

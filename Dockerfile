@@ -6,7 +6,24 @@
 # that, but it means the backend has to be installed for real, and a
 # single-stage build would then ship hatchling in the runtime image. Building
 # the wheel here and copying only the wheel across keeps both properties.
-FROM python:3.12-slim AS builder
+#
+# Both stages pin the base image by digest. Every Python layer above it is
+# hash-pinned, but `python:3.12-slim` is a mutable tag that upstream rebuilds
+# regularly, so without this the interpreter and the OS packages underneath all
+# those hashes still differ between two builds of the same commit. The builder
+# is pinned too: it is what produces the wheel.
+#
+# The digest below is the multi-architecture index, not one platform's manifest,
+# which is what keeps the linux/amd64 + linux/arm64 release build working.
+# It resolved to Python 3.12.13 on Debian trixie, published 2026-08-05.
+#
+# The tag stays in the reference even though Docker ignores it once a digest is
+# present. It is what Dependabot's `docker` ecosystem matches on to propose a
+# new digest, and it tells a reader which stream this pin came from. Freezing
+# the OS packages also freezes their CVEs, so the pin is only safe with
+# something refreshing it — see .github/dependabot.yml, which also records why
+# nothing tries to verify the tag and digest still agree.
+FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36 AS builder
 
 WORKDIR /app
 
@@ -22,7 +39,7 @@ COPY src/ src/
 RUN pip wheel --no-cache-dir --no-deps --no-build-isolation -w /wheels .
 
 
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
 
 WORKDIR /app
 
