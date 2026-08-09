@@ -318,57 +318,30 @@ And the privilege drop, against a root-owned volume — the shape Fly presents,
 and the failure mode that would otherwise appear only as a crash loop after
 deploy:
 
-The last line **deletes** the volume and container. Both names carry `$$`, the
-shell's pid, so a run cannot collide with an existing volume and recursively
-`chown` someone else's data — `docker volume create` reuses a volume of the same
-name rather than refusing. Paste the whole block into one shell so `$$` stays
-the same throughout.
-
 ```bash
-vol=later-ink-privdrop-$$
-ctr=later-ink-privdrop-$$
-
-docker volume create "$vol"
-docker run --rm -v "$vol":/data alpine chown -R 0:0 /data
-
-# Must start, create the database, and answer /healthz. docker run -d returns
-# before uvicorn is listening, so poll rather than curling straight away.
-docker run -d --name "$ctr" -p 8000:8000 \
-  -v "$vol":/data -e DATABASE_PATH=/data/app.db later-ink:test
-for _ in $(seq 30); do
-  curl -fsS --max-time 5 localhost:8000/healthz >/dev/null && break
-  sleep 1
-done
-curl -fsS --max-time 5 localhost:8000/healthz >/dev/null \
-  && echo "ok: healthy" || echo "FAIL: never became healthy"
-
-# uid 10001 against uvicorn, and no privilege left to regain. The matching
-# happens inside the container so it is always GNU grep, whatever the host has.
-docker top "$ctr"
-docker exec "$ctr" grep -E '^(Uid|NoNewPrivs|CapInh):' /proc/1/status
-docker exec "$ctr" grep -Eq '^Uid:[[:space:]]+10001' /proc/1/status \
-  && echo "ok: pid 1 is 10001" || echo "FAIL: pid 1 is not 10001"
-docker exec "$ctr" grep -Eq '^NoNewPrivs:[[:space:]]*1$' /proc/1/status \
-  && echo "ok: no_new_privs set" || echo "FAIL: no_new_privs not set"
-docker exec "$ctr" grep -Eq '^CapInh:[[:space:]]*0+$' /proc/1/status \
-  && echo "ok: inheritable caps empty" || echo "FAIL: inheritable caps present"
-
-# The mount itself, not its contents.
-docker run --rm -v "$vol":/data alpine stat -c '%u:%g' /data \
-  | grep -qx '10001:10001' && echo "ok: /data owned by 10001" \
-  || echo "FAIL: /data not owned by 10001"
-
-docker rm -f "$ctr" && docker volume rm "$vol"
+./scripts/verify-privilege-drop.sh            # or: ... later-ink:test
 ```
 
-Each check prints its own verdict rather than leaving you to read raw output,
-because a privilege regression that only shows up as a different number in a
-process table is exactly the kind that gets skimmed past. `docker top` is left
-printing for the eye: it reads the process table on the host rather than in the
-container, which matters twice over — the base image has no `ps`, and
-`docker exec` would run as the image's user (root, since there is no `USER`)
-rather than as the process being checked. Worth re-running whenever the
-entrypoint or the base image changes.
+It creates a scratch volume, forces it root-owned, runs the image against it,
+and answers six questions: the container starts and serves `/healthz`, pid 1 is
+uid 10001, `no_new_privs` is set, inheritable capabilities are empty, the
+database was created, and `/data` itself — not merely the file in it — ends up
+owned by 10001. Each prints its own `ok:`/`FAIL:` verdict and the script exits
+non-zero if any failed, so it can gate a release rather than relying on someone
+reading a process table and spotting a wrong number. On failure it prints the
+container's last log lines, where an unopenable database shows up and nowhere
+else.
+
+Scratch resources carry `$$` and are removed by an `EXIT` trap, so a run cannot
+collide with a volume that matters (`docker volume create` reuses one of the
+same name rather than refusing) and cannot leave one behind. Host port 18080 by
+default, to stay clear of a running Compose stack; set `PORT` to change it.
+
+It also prints `docker top` and `/proc/1/status` for the eye. `docker top`
+reads the process table on the host rather than in the container, which matters
+twice over: the base image has no `ps`, and `docker exec` would run as the
+image's user (root, since there is no `USER`) rather than as the process being
+checked. Worth re-running whenever the entrypoint or the base image changes.
 
 `--universal` keeps one file valid for both image architectures;
 `--python-version 3.11` matches the project's floor rather than whichever
