@@ -206,18 +206,28 @@ docker buildx rm later-ink-test
 
 `--output=type=cacheonly` builds without producing an image; the exit code is
 the answer. Watch for either build dropping into a *source compile* of `lxml`,
-`pillow` or `cryptography` — that means the lock is missing a wheel hash for
-that platform. A healthy build downloads wheels and takes seconds per package.
+`pillow` or `cryptography` — that may mean no wheel exists for that platform and
+Python version, or that the lock carries no hash for the one that does. Either
+way it wants investigating with `--progress=plain` to see what the resolver
+chose. A healthy build downloads wheels and takes seconds per package.
 
 Two properties worth checking on the built image:
 
 ```bash
-docker run --rm later-ink:test pip list | grep -i hatchling   # expect nothing
+# The build backend must not have shipped: absent is the healthy result.
+docker run --rm later-ink:test pip list | grep -qi hatchling \
+  && echo "FAIL: build backend shipped in the runtime image" \
+  || echo "ok: build backend absent"
+
+# Spot-check a few runtime pins against requirements.txt.
 docker run --rm later-ink:test pip list | grep -Ei 'fastapi|lxml|pillow'
 ```
 
-The first confirms the build backend stayed in the first stage rather than
-shipping. The second should match `requirements.txt` exactly.
+The first is the multi-stage property: `grep` exits non-zero when it finds
+nothing, so the explicit branch makes the healthy case unambiguous. The second
+is a spot check rather than proof — for the full comparison, diff
+`docker run --rm later-ink:test pip freeze` against the pins in
+`requirements.txt`.
 
 `--universal` keeps one file valid for both image architectures;
 `--python-version 3.11` matches the project's floor rather than whichever

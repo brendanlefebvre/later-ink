@@ -60,10 +60,14 @@ jobs:
       # A lockfile freezes CVEs in place as surely as it freezes versions, so
       # this job is what turns a stale pin into a visible failure.
       - run: python -m pip install --require-hashes -r .github/requirements-ci.txt
-      # Every lockfile, not just the runtime one: the build backend and the CI
-      # tooling can pick up a CVE as easily as anything the app imports.
+      # Every lockfile. requirements.txt is listed even though the dev lock is
+      # currently a superset of it: the two are compiled independently and can
+      # diverge, and requirements.txt is the one the image actually installs.
+      # The build backend and CI tooling can pick up a CVE as readily as
+      # anything the app imports.
       - run: >-
           pip-audit --progress-spinner off --require-hashes
+          -r requirements.txt
           -r requirements-dev.txt
           -r requirements-build.txt
           -r .github/requirements-ci.txt
