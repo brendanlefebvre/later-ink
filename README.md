@@ -199,6 +199,75 @@ of a freshly fetched one. The Dockerfile builds a wheel in a first stage for the
 same reason: without build isolation the backend would otherwise remain
 installed in the shipped image.
 
+### The base image pin
+
+The lockfiles stop at the Python layer. Both `FROM` lines in the `Dockerfile`
+are therefore pinned to the base image's **multi-architecture index digest**,
+not the mutable `python:3.12-slim` tag — otherwise the interpreter and the OS
+packages underneath every hash-pinned wheel are still whatever upstream last
+published. The index digest rather than a single platform's manifest is what
+keeps the `linux/amd64` + `linux/arm64` release build working.
+
+Freezing OS packages freezes their CVEs too, so the pin is only safe alongside
+something that refreshes it: Dependabot's `docker` ecosystem, weekly, which
+rewrites the tag and the digest together. To bump one by hand instead:
+
+```bash
+# The digest the tag currently points at. imagetools reads the registry
+# without downloading layers.
+docker buildx imagetools inspect python:3.12-slim | grep Digest
+```
+
+Nothing in CI compares a pinned digest against the tag written beside it, and
+the distinction matters: such a check would measure *staleness*, not
+correctness. When upstream rebuilds `python:3.12-slim` the tag moves to the new
+image; the pinned digest stays pullable, it simply stops being what the tag
+names. So a CI job comparing the two would go red on every correct pin the day
+after a rebuild, and the only way to green it is to bump — which is Dependabot's
+job, on its own schedule, rewriting tag and digest together. It would also put a
+Docker Hub call on every CI run, against anonymous pull limits shared across
+runner IPs.
+
+The tag can therefore drift out of date, and it is worth checking when a pin
+changes that the digest is a real image of the series the tag claims:
+
+```bash
+docker run --rm python:3.12-slim@sha256:<digest> python -V   # Python 3.12.x
+docker run --rm python:3.12-slim@sha256:<digest> \
+  sh -c 'grep ^PRETTY /etc/os-release'                       # Debian
+```
+
+### Running as an unprivileged user
+
+`uvicorn` runs as `app`, uid/gid **10001**, not root. The image has no `USER`
+instruction, though, and that is deliberate: `fly.toml` mounts a volume at
+`/data` and Fly creates volumes root-owned, while `docker compose` bind-mounts
+`./data`, where ownership comes from the host. Either way the mount is laid over
+the image's filesystem at runtime, so a build-time `chown` is invisible and a
+plain `USER app` yields a container that starts, cannot open its SQLite
+database, and takes the deployed instance down.
+
+`docker-entrypoint.sh` therefore starts as root, creates the directory holding
+`DATABASE_PATH`, takes ownership of it and of the SQLite database and its
+sidecars, and drops privileges with `setpriv` before `exec`ing the app.
+`setpriv` is part of `util-linux` and already in the Debian base image, so this
+adds no package to install, pin, or audit. Run the image with a *non-root*
+`--user` / compose `user:` and the entrypoint sees it is not root, skips both
+steps, and execs the app directly — the mount then has to already match that
+uid. (`--user root` or `--user 0:0` still takes the root path and still drops
+to `app`.)
+
+Image scanners flag the missing `USER` (Trivy `DS-0002`, Checkov
+`CKV_DOCKER_3`). The check is a heuristic on the instruction rather than on the
+process, and the app process is unprivileged. One process genuinely is not:
+Docker runs `HEALTHCHECK` outside the entrypoint, so it stays root. It makes an
+HTTP request to the app's own port and needs nothing more.
+
+The fixed uid has one visible consequence locally: `./data` in a Compose
+checkout ends up owned by 10001 on the host, so inspecting or removing it wants
+`sudo`. The comment in `docker-compose.yml` gives the `user:` line that avoids
+it.
+
 ### Verifying the image locally
 
 The release workflow builds `linux/amd64` and `linux/arm64`, so a plain
@@ -244,6 +313,37 @@ nothing, so the explicit branch makes the healthy case unambiguous. The second
 is a spot check rather than proof — for the full comparison, diff
 `docker run --rm later-ink:test pip freeze` against the pins in
 `requirements.txt`.
+
+And the privilege drop, against a root-owned volume — the shape Fly presents,
+and the failure mode that would otherwise appear only as a crash loop after
+deploy:
+
+```bash
+./scripts/verify-privilege-drop.sh            # or: ... later-ink:test
+```
+
+It creates a scratch volume, forces it root-owned, runs the image against it,
+and answers six questions: the container starts and serves `/healthz`, pid 1
+runs as uid and gid 10001 across all four identity fields of each (real,
+effective, saved and filesystem — a process holding an effective 0 would pass a
+check on the real uid alone), `no_new_privs` is set, inheritable capabilities
+are empty, the database was created, and `/data` itself — not merely the file
+in it — ends up owned by 10001. Each prints its own `ok:`/`FAIL:` verdict and the script exits
+non-zero if any failed, so it can gate a release rather than relying on someone
+reading a process table and spotting a wrong number. On failure it prints the
+container's last log lines, where an unopenable database shows up and nowhere
+else.
+
+Scratch resources carry `$$` and are removed by an `EXIT` trap, so a run cannot
+collide with a volume that matters (`docker volume create` reuses one of the
+same name rather than refusing) and cannot leave one behind. Host port 18080 by
+default, to stay clear of a running Compose stack; set `PORT` to change it.
+
+It also prints `docker top` and `/proc/1/status` for the eye. `docker top`
+reads the process table on the host rather than in the container, which matters
+twice over: the base image has no `ps`, and `docker exec` would run as the
+image's user (root, since there is no `USER`) rather than as the process being
+checked. Worth re-running whenever the entrypoint or the base image changes.
 
 `--universal` keeps one file valid for both image architectures;
 `--python-version 3.11` matches the project's floor rather than whichever

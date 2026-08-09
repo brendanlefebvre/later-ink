@@ -1,5 +1,5 @@
 # The Dockerfile only COPYs requirements.txt, requirements-build.txt,
-# pyproject.toml, README.md, and src/.
+# pyproject.toml, README.md, docker-entrypoint.sh, and src/.
 # Everything else is dead weight in the build context (uploaded to the
 # builder on every deploy) — exclude it.
 

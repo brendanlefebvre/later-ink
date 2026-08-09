@@ -12,9 +12,18 @@ def load_env_file() -> Path | None:
     """
     xdg = os.environ.get("XDG_CONFIG_HOME", "").strip() or str(Path.home() / ".config")
     for path in (Path(xdg) / "later-ink" / "env", Path(".env")):
-        if not path.is_file():
+        # A candidate we cannot even stat is not a fatal condition, but
+        # Path.is_file() only swallows "not there" errors — a permission denial
+        # propagates, and this runs at import, so it takes the whole app down.
+        # The container hit exactly that: it drops to an unprivileged user
+        # while HOME still pointed at root's 0700 home directory.
+        try:
+            if not path.is_file():
+                continue
+            contents = path.read_text()
+        except OSError:
             continue
-        for raw in path.read_text().splitlines():
+        for raw in contents.splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
