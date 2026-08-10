@@ -38,6 +38,92 @@ def _clean_referer(referer: str | None) -> str | None:
         pass
     return referer[:500]
 
+
+# Ordered (needle, label) rules for collapsing a raw User-Agent into a family
+# for the /stats breakdown. Raw UA strings fragment by version (Chrome/78 vs
+# Chrome/120) and OS build, so a straight GROUP BY is useless. Bots and app
+# clients frequently carry a browser-like "Mozilla/5.0" prefix, so they are
+# matched before the browser heuristics — order is significant.
+_BOT_FAMILIES = (
+    ("censys", "Censys"),
+    ("reconx", "ReconX"),
+    ("chatgpt-user", "ChatGPT-User"),
+    ("oai-searchbot", "OAI-SearchBot"),
+    ("gptbot", "GPTBot"),
+    ("claudebot", "ClaudeBot"),
+    ("anthropic", "ClaudeBot"),
+    ("perplexity", "PerplexityBot"),
+    ("googlebot", "Googlebot"),
+    ("bingbot", "Bingbot"),
+    ("yandexbot", "YandexBot"),
+    ("applebot", "Applebot"),
+    ("duckduckbot", "DuckDuckBot"),
+    ("facebookexternalhit", "facebookexternalhit"),
+    ("bytespider", "Bytespider"),
+    ("petalbot", "PetalBot"),
+    ("ahrefsbot", "AhrefsBot"),
+    ("semrushbot", "SemrushBot"),
+    ("mj12bot", "MJ12bot"),
+    ("dataforseo", "DataForSeoBot"),
+    ("expanse", "Expanse"),
+    ("internet-measurement", "InternetMeasurement"),
+    ("zgrab", "zgrab"),
+    ("masscan", "masscan"),
+    ("python-requests", "python-requests"),
+    ("curl/", "curl"),
+    ("wget/", "wget"),
+    ("go-http-client", "Go-http-client"),
+    ("bot", "Other bot"),
+    ("crawler", "Other bot"),
+    ("spider", "Other bot"),
+)
+
+
+def classify_user_agent(ua: str | None) -> tuple[str, str]:
+    """Collapse a raw User-Agent into (bucket, family) for the /stats breakdown.
+
+    bucket is "browser" for human browsers and "other" for bots, crawlers, and
+    native app HTTP clients. family is a version-stripped label. Rule order is
+    significant: bots and app clients often carry a browser-like "Mozilla/5.0"
+    prefix, so they're matched before the browser heuristics.
+    """
+    s = (ua or "").strip()
+    if not s:
+        return ("other", "(none)")
+    low = s.lower()
+
+    for needle, label in _BOT_FAMILIES:
+        if needle in low:
+            return ("other", label)
+
+    # Native app HTTP clients: "Hydra/22 CFNetwork/... Darwin/...", no Mozilla.
+    if "cfnetwork" in low and not low.startswith("mozilla"):
+        product = s.split("/", 1)[0].split()[0] or "App"
+        return ("other", f"{product} (app)")
+
+    if any(t in low for t in ("iphone", "ipad", "ipod")):
+        if "crios" in low:
+            return ("browser", "Chrome (iOS)")
+        if "fxios" in low:
+            return ("browser", "Firefox (iOS)")
+        return ("browser", "Safari (iOS)")
+    if "android" in low:
+        return ("browser", "Chrome (Android)" if "chrome" in low else "Android browser")
+    if "edg/" in low or "edge/" in low:
+        return ("browser", "Edge")
+    if "opr/" in low or "opera" in low:
+        return ("browser", "Opera")
+    if "firefox/" in low or "gecko/2" in low or " rv:" in low:
+        return ("browser", "Firefox")
+    if "chrome/" in low:
+        return ("browser", "Chrome")
+    if "safari/" in low and "version/" in low:
+        return ("browser", "Safari (macOS)")
+    if "mozilla" in low:
+        return ("browser", "Other browser")
+    return ("other", "Other")
+
+
 RESERVED_PATHS = {
     "opds", "start", "health", "healthz", "version", "stats", "static", "assets",
     "docs", "openapi.json", "favicon.ico", "robots.txt",
@@ -314,6 +400,32 @@ class Store:
                 (since, limit),
             ).fetchall()
         return [(r["ref"], r["n"]) for r in rows]
+
+    def top_user_agents(
+        self, since: float = 0.0
+    ) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+        """Return (browsers, others): user-agent families seen since `since`,
+        each a (family, count) list sorted by count desc then name. Browsers
+        are human clients; others are bots, crawlers, and native app clients.
+        Grouping is done in Python (see classify_user_agent) because the useful
+        buckets aren't expressible as SQL over the raw, version-noisy string."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT user_agent AS ua, COUNT(*) AS n "
+                "FROM hits WHERE ts >= ? GROUP BY user_agent",
+                (since,),
+            ).fetchall()
+        browsers: dict[str, int] = {}
+        others: dict[str, int] = {}
+        for r in rows:
+            bucket, family = classify_user_agent(r["ua"])
+            target = browsers if bucket == "browser" else others
+            target[family] = target.get(family, 0) + r["n"]
+
+        def _ranked(d: dict[str, int]) -> list[tuple[str, int]]:
+            return sorted(d.items(), key=lambda kv: (-kv[1], kv[0]))
+
+        return (_ranked(browsers), _ranked(others))
 
     def recent_hits(self, limit: int = 50) -> list[tuple[float, str, str, str]]:
         with self._conn() as conn:

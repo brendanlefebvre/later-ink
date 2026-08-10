@@ -586,11 +586,17 @@ _STATS_STYLE = (
 )
 
 
-def stats_page(total: int, total_30d: int, referrers, recent) -> str:
-    ref_rows = "".join(
-        f'<tr><td class="n">{n}</td><td class="ref">{escape(ref)}</td></tr>'
-        for ref, n in referrers
-    ) or '<tr><td colspan="2" class="muted">No hits yet.</td></tr>'
+def _count_rows(items, empty: str) -> str:
+    return "".join(
+        f'<tr><td class="n">{n}</td><td class="ref">{escape(label)}</td></tr>'
+        for label, n in items
+    ) or f'<tr><td colspan="2" class="muted">{empty}</td></tr>'
+
+
+def stats_page(total: int, total_30d: int, referrers, browsers, bots, recent) -> str:
+    ref_rows = _count_rows(referrers, "No hits yet.")
+    browser_rows = _count_rows(browsers, "No browsers yet.")
+    bot_rows = _count_rows(bots, "None.")
     recent_rows = "".join(
         f"<tr><td>{escape(_fmt_ts(ts))}</td>"
         f'<td class="ref">{escape(ref or "(direct)")}</td>'
@@ -605,6 +611,8 @@ def stats_page(total: int, total_30d: int, referrers, recent) -> str:
         f"<p><strong>{total}</strong> total hits · <strong>{total_30d}</strong> in the "
         "last 30 days. (Landing-page views only; referer + user-agent, no IPs.)</p>"
         f"<h2>Top referrers · last 30 days</h2><table>{ref_rows}</table>"
+        f"<h2>Top browsers · last 30 days</h2><table>{browser_rows}</table>"
+        f"<h2>Bots &amp; app clients · last 30 days</h2><table>{bot_rows}</table>"
         f"<h2>Recent hits</h2><table>"
         "<tr><th>When (UTC)</th><th>Referrer</th><th>User-agent</th></tr>"
         f"{recent_rows}</table></body></html>"

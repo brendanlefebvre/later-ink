@@ -355,11 +355,14 @@ async def stats(request: Request, token: str = Query(default="")):
         raise HTTPException(404)  # 404, not 403 — don't confirm the endpoint exists
     store: Store = app.state.store
     since = time.time() - 30 * 86400
+    browsers, bots = store.top_user_agents(since)
     return HTMLResponse(
         pages.stats_page(
             total=store.hit_count(),
             total_30d=store.hit_count(since),
             referrers=store.top_referrers(since),
+            browsers=browsers,
+            bots=bots,
             recent=store.recent_hits(50),
         ),
         # No Cache-Control here: the security_headers middleware sets
