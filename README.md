@@ -270,10 +270,17 @@ it.
 
 ### Verifying the image locally
 
+CI's `image` job builds the Dockerfile on every pull request, once per release
+architecture on a native runner, and runs the build-backend check and
+`scripts/verify-privilege-drop.sh` below against each. So the checks here are no
+longer the only thing standing between a broken image and a release tag; they
+are what to reach for when iterating locally, before pushing.
+
 The release workflow builds `linux/amd64` and `linux/arm64`, so a plain
-`docker build` on one machine only exercises half of what ships. A missing
-wheel for the other architecture shows up nowhere else — CI does not build the
-image, only the release tag does.
+`docker build` on one machine only exercises half of what ships, and a wheel
+published for one architecture and not the other is invisible to it. The
+multi-platform build below covers that from a single machine; CI covers it with
+one runner per architecture.
 
 ```bash
 docker build -t later-ink:test .

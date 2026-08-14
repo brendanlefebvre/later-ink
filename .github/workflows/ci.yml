@@ -71,3 +71,58 @@ jobs:
           -r requirements-dev.txt
           -r requirements-build.txt
           -r .github/requirements-ci.txt
+
+  image:
+    # The image was the one artifact here that nothing checked on the way in.
+    # test and audit cover the Python layers, but the Dockerfile was built only
+    # by release.yml, on a v* tag — so a base image bump whose lockfile no
+    # longer installs against it passed review green and failed while cutting
+    # the release. Dependabot proposes exactly that bump weekly, which makes it
+    # the likeliest gap to be hit and the reason this job exists.
+    #
+    # Both release architectures, each on its own native runner. The release
+    # build is linux/amd64 + linux/arm64, and a wheel published for one and not
+    # the other is invisible to a single-architecture build. arm64 runners are
+    # free for public repositories, so this needs neither QEMU emulation nor a
+    # buildx builder: two plain `docker build`s, each on its own hardware, at a
+    # fraction of the wall time an emulated arm64 build costs.
+    name: image (${{ matrix.arch }})
+    strategy:
+      # One architecture failing is a fact about that architecture. Report the
+      # other rather than cancelling it — which of the two broke is most of the
+      # diagnosis.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # No --platform and no buildx: the runner's own architecture is the one
+      # under test, and each half of the matrix is a native builder for it.
+      - run: docker build -t later-ink:test .
+      # The multi-stage property. --no-build-isolation requires the PEP 517
+      # backend to be installed for real in the builder stage, and only the
+      # wheel it produces crosses into the runtime image. grep exits non-zero
+      # when it finds nothing, so here the healthy result is the failing grep
+      # and the explicit branch is what keeps that unambiguous.
+      - name: build backend absent from the runtime image
+        run: |
+          if docker run --rm later-ink:test pip list | grep -qi hatchling; then
+            echo "FAIL: build backend shipped in the runtime image" >&2
+            exit 1
+          fi
+          echo "ok: build backend absent"
+      # Runs the image against a root-owned volume, the shape Fly presents, and
+      # checks the entrypoint's privilege drop. It is also the only step that
+      # proves the built image runs at all: an interpreter the wheels do not
+      # match, or a missing shared library, surfaces here rather than as a crash
+      # loop after deploy. Same script the README documents running by hand.
+      - run: ./scripts/verify-privilege-drop.sh later-ink:test
