@@ -259,6 +259,28 @@ same inputs, so caching them is safe:
 - hitting `MAX_IMAGES`, `MAX_IMAGE_BYTES_TOTAL`, or `MAX_IMAGE_BYTES`
 - an SVG rejected by `_sanitize_svg` as unparseable or non-SVG
 
+The test to apply: **does the outcome depend on anything besides the input
+bytes?** The caps are limits on *content* — an article with 45 images always
+stops at the 30th, because images are fetched in document order and each has
+the size it has. `IMAGE_PHASE_BUDGET` is a limit on *elapsed wall-clock time*,
+so the same article embeds every image on a fast connection and half of them on
+a slow one. Same inputs, different output — the exact failure this design
+exists to remove.
+
+Note also that the budget feeds back into individual fetches:
+
+```python
+timeout=min(IMAGE_FETCH_TIMEOUT, remaining),
+```
+
+so a shrinking budget shortens each remaining image's timeout and can turn a
+would-be success into a failure. The clock does not merely truncate the loop.
+
+Caveat on the caps: they are deterministic *given the same image bytes from
+upstream*. If a CDN begins serving a differently-compressed variant, sizes
+shift and a cap may bite at a different image. That is upstream drift — the
+separate category the cache itself protects against once an entry exists.
+
 A degraded render is served normally but not stored, so a later download can
 produce the good one and cache that.
 
