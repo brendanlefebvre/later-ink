@@ -1,6 +1,7 @@
 import ipaddress
 import logging
 import os
+import re
 import secrets as pysecrets
 import sqlite3
 import time
@@ -73,10 +74,29 @@ _BOT_FAMILIES = (
     ("curl/", "curl"),
     ("wget/", "wget"),
     ("go-http-client", "Go-http-client"),
-    ("bot", "Other bot"),
     ("crawler", "Other bot"),
     ("spider", "Other bot"),
 )
+
+# The catch-all for crawlers not named above. "bot" cannot be a bare substring
+# the way "crawler" and "spider" can: CUBOT is a shipping Android phone brand,
+# so "Mozilla/5.0 (Linux; Android 12; CUBOT NOTE 21) ... Chrome/120" is a
+# person, and counting them as a crawler corrupts the one number this page
+# exists to report. Requiring a delimiter after the token keeps "FooBot/1.0",
+# "compatible; somebot;", "Slackbot-LinkExpanding" and a bare trailing
+# "SomeBot", while device names with a model number after them fall through to
+# the browser rules. A space is deliberately not a delimiter here: that is
+# exactly the CUBOT case.
+#
+# Residual, accepted: a UA ending "; CUBOT)" still matches, and a crawler
+# presenting a complete browser UA with no bot token anywhere is not
+# distinguishable from a browser by any rule here.
+_GENERIC_BOT = re.compile(r"bot(?:[/;,)\]-]|$)")
+
+# Family labels are display strings for one admin table, and the app-client
+# branch below derives one from caller-supplied text. Bounded here rather than
+# at the renderer so every consumer gets the same guarantee.
+_FAMILY_MAX = 40
 
 
 def classify_user_agent(ua: str | None) -> tuple[str, str]:
@@ -95,25 +115,52 @@ def classify_user_agent(ua: str | None) -> tuple[str, str]:
     for needle, label in _BOT_FAMILIES:
         if needle in low:
             return ("other", label)
+    if _GENERIC_BOT.search(low):
+        return ("other", "Other bot")
 
     # Native app HTTP clients: "Hydra/22 CFNetwork/... Darwin/...", no Mozilla.
+    # The product is whatever precedes the first slash, which a caller controls
+    # entirely: a leading "/" leaves nothing there ("/1.0 CFNetwork/3860
+    # Darwin/25" is a real shape), and indexing that empty split took the whole
+    # page down with an IndexError rather than falling back.
     if "cfnetwork" in low and not low.startswith("mozilla"):
-        product = s.split("/", 1)[0].split()[0] or "App"
+        head = s.split("/", 1)[0].split()
+        product = head[0][:_FAMILY_MAX] if head else "App"
         return ("other", f"{product} (app)")
 
+    # Platform first, but never ahead of the browser it is running: every one of
+    # these carries the platform token too, so a bare platform rule would claim
+    # them all for the platform default.
     if any(t in low for t in ("iphone", "ipad", "ipod")):
         if "crios" in low:
             return ("browser", "Chrome (iOS)")
         if "fxios" in low:
             return ("browser", "Firefox (iOS)")
+        if "edgios" in low:
+            return ("browser", "Edge (iOS)")
+        if "opt/" in low:
+            return ("browser", "Opera (iOS)")
         return ("browser", "Safari (iOS)")
     if "android" in low:
+        if "firefox/" in low:
+            return ("browser", "Firefox (Android)")
+        if "edga/" in low:
+            return ("browser", "Edge (Android)")
+        if "opr/" in low:
+            return ("browser", "Opera (Android)")
+        if "samsungbrowser/" in low:
+            return ("browser", "Samsung Internet")
         return ("browser", "Chrome (Android)" if "chrome" in low else "Android browser")
     if "edg/" in low or "edge/" in low:
         return ("browser", "Edge")
     if "opr/" in low or "opera" in low:
         return ("browser", "Opera")
-    if "firefox/" in low or "gecko/2" in low or " rv:" in low:
+    # Before the Firefox rule, and the reason that rule no longer tests a bare
+    # " rv:": IE11 is "Mozilla/5.0 (Windows NT 10.0; Trident/7.0; rv:11.0) like
+    # Gecko", which carries the token and none of the engine.
+    if "trident/" in low or "msie " in low:
+        return ("browser", "Internet Explorer")
+    if "firefox/" in low or "gecko/2" in low:
         return ("browser", "Firefox")
     if "chrome/" in low:
         return ("browser", "Chrome")
@@ -402,13 +449,19 @@ class Store:
         return [(r["ref"], r["n"]) for r in rows]
 
     def top_user_agents(
-        self, since: float = 0.0
+        self, since: float = 0.0, limit: int = 100
     ) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
         """Return (browsers, others): user-agent families seen since `since`,
         each a (family, count) list sorted by count desc then name. Browsers
         are human clients; others are bots, crawlers, and native app clients.
         Grouping is done in Python (see classify_user_agent) because the useful
-        buckets aren't expressible as SQL over the raw, version-noisy string."""
+        buckets aren't expressible as SQL over the raw, version-noisy string.
+
+        Each list is capped at `limit`, the way top_referrers caps its own. The
+        taxonomy bounds how many families the browser rules can produce, but the
+        app-client branch mints one per caller-supplied product token, so
+        unauthenticated traffic on the landing page could otherwise put an
+        unbounded number of rows on this page."""
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT user_agent AS ua, COUNT(*) AS n "
@@ -423,7 +476,7 @@ class Store:
             target[family] = target.get(family, 0) + r["n"]
 
         def _ranked(d: dict[str, int]) -> list[tuple[str, int]]:
-            return sorted(d.items(), key=lambda kv: (-kv[1], kv[0]))
+            return sorted(d.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
 
         return (_ranked(browsers), _ranked(others))
 

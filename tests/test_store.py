@@ -186,3 +186,22 @@ def test_record_hit_retention_zero_keeps_everything(tmp_path):
         )
     store.record_hit("/", "https://new.example/", "ua", retention_days=0)
     assert store.hit_count() == 2  # 0 = keep everything, no prune
+
+
+def test_top_user_agents_caps_each_list(tmp_path):
+    """The app-client branch mints a family per caller-supplied product token,
+    so the number of families is not bounded by the taxonomy the way the
+    browser rules are. Unauthenticated traffic on the landing page could
+    otherwise put a row per minted token on the admin's stats page."""
+    store = Store(str(tmp_path / "uas.db"), Fernet(Fernet.generate_key()))
+    for i in range(30):
+        store.record_hit("/", None, f"Probe{i}/1 CFNetwork/1 Darwin/1")
+    store.record_hit("/", None, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
+
+    browsers, others = store.top_user_agents(limit=10)
+    assert len(others) == 10  # 30 distinct app families, capped
+    assert browsers == [("Chrome", 1)]  # the cap does not disturb a short list
+
+    _, uncapped = store.top_user_agents()
+    assert len(uncapped) == 30  # the default is generous, not absent
