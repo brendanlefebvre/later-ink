@@ -471,7 +471,14 @@ with the cache both enabled and disabled.
 
 ## Sequencing note
 
-§1 and §2 (determinism) stand alone and deliver the confirmed fix with no
-storage. §3–§8 (the cache) close the image-timing residual. Determinism is a
-strict prefix of the whole, so shipping it first and adding the cache after is
-a clean split if the work needs to land in stages.
+**Decided: all of this lands as one PR on `epub-determinism-and-opt-in-cache`.**
+
+§1 and §2 (determinism) are nonetheless a strict prefix — they stand alone and
+deliver the confirmed fix with no storage, while §3–§8 (the cache) close the
+image-timing residual. That ordering should still drive the commit sequence
+within the PR, so determinism is reviewable on its own and a revert of the
+cache work does not take the fix with it.
+
+The `docker-entrypoint.sh` change in §7 is **in scope**. It is the part of this
+most likely to break a deployment rather than a test, so it needs the
+verification called out in §7 rather than test coverage alone.
