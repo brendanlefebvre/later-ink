@@ -89,6 +89,35 @@ updates:
       base-image:
         patterns:
           - "*"
+    # Stay on the 3.12 series. Nothing here reads on the tag's Python version,
+    # so `python:3.12-slim` and `python:3.14-slim` are the same kind of update
+    # to Dependabot as a rebuild of the tag we are on — it proposed 3.14 in a
+    # pull request shaped exactly like the weekly digest refresh this entry
+    # exists for, and the two want different amounts of attention. An
+    # interpreter series move changes what the hash-pinned wheels are installed
+    # against; it wants a deliberate change with CI moved to match, not a merge
+    # on a Monday.
+    #
+    # Only the version is ignored. `3.12-slim` carries no patch component, so
+    # within the series there is nothing to bump but the digest, and a
+    # digest-only refresh is not a version update — it is what still comes
+    # through, which is precisely the CVE patching the pin depends on.
+    #
+    # Worth knowing how this fails: if these refreshes silently stop arriving,
+    # the pin quietly becomes a frozen CVE, which is the failure this entry was
+    # written to prevent. Weeks of no base-image pull request while upstream is
+    # rebuilding the tag is the symptom. Removing this block restores the old
+    # behaviour, series jumps and all.
+    #
+    # To move series deliberately: drop or narrow this, take the pull request
+    # Dependabot then opens, and move the python-version in ci.yml and
+    # release.yml with it, along with the tag written in README.md and in the
+    # Dockerfile's own comments.
+    ignore:
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
 
   # CI tooling only — build and pip-audit. See the note above on why this is
   # scoped to /.github and why no entry covers the repository root.
