@@ -210,7 +210,16 @@ keeps the `linux/amd64` + `linux/arm64` release build working.
 
 Freezing OS packages freezes their CVEs too, so the pin is only safe alongside
 something that refreshes it: Dependabot's `docker` ecosystem, weekly, which
-rewrites the tag and the digest together. To bump one by hand instead:
+rewrites the tag and the digest together.
+
+The Python series is held at 3.12, by an `ignore` in `.github/dependabot.yml`
+that drops minor and major version updates and lets digest-only refreshes
+through. So the weekly pull requests carry rebuilds of the tag this project is
+already on, and moving to a newer interpreter is a deliberate change rather than
+one that arrives looking like a patch. The note beside that block says what to
+change when the series does move.
+
+To bump one by hand instead:
 
 ```bash
 # The digest the tag currently points at. imagetools reads the registry
