@@ -1,12 +1,18 @@
 import asyncio
 import re
 import time
-from datetime import UTC, datetime
 from html import unescape
 
 import httpx
 
-from .base import Article, ArticleUnavailable, Connector, Folder, UpstreamError
+from .base import (
+    Article,
+    ArticleUnavailable,
+    Connector,
+    Folder,
+    UpstreamError,
+    parse_dt,
+)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -40,18 +46,6 @@ PER_PAGE = 30
 _TOKEN_MARGIN = 60.0
 
 
-def _parse_dt(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed
-    return parsed.astimezone(UTC).replace(tzinfo=None)
-
-
 def _article_from_entry(entry: dict) -> Article:
     authors = entry.get("published_by") or []
     author = ", ".join(a for a in authors if a) or None
@@ -66,9 +60,9 @@ def _article_from_entry(entry: dict) -> Article:
         "image_url": entry.get("preview_picture"),
         # created_at rather than updated_at, for the same reason as Readwise's
         # saved_at: updated_at moves when the entry is archived or starred.
-        "content_date": _parse_dt(entry.get("created_at")),
+        "content_date": parse_dt(entry.get("created_at")),
     }
-    updated = _parse_dt(entry.get("updated_at") or entry.get("created_at"))
+    updated = parse_dt(entry.get("updated_at") or entry.get("created_at"))
     if updated is not None:
         kwargs["updated"] = updated
     return Article(**kwargs)

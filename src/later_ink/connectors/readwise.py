@@ -10,6 +10,7 @@ from .base import (
     Folder,
     UpstreamError,
     minutes_to_words,
+    parse_dt,
 )
 
 BASE_URL = "https://readwise.io/api/v3"
@@ -90,25 +91,6 @@ def _reading_time_view(article: Article, *, short: bool) -> bool:
     return words > minutes_to_words(LONG_READ_MIN_MINUTES)
 
 
-def _parse_dt(value: str | None) -> datetime | None:
-    """Parse an upstream ISO timestamp as naive UTC, or None.
-
-    Normalized to UTC with the tzinfo dropped because ebooklib writes
-    dcterms:modified with strftime("%Y-%m-%dT%H:%M:%SZ") — it appends the Z
-    without converting, so an aware non-UTC value would be labelled UTC while
-    carrying local wall-clock time.
-    """
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed
-    return parsed.astimezone(UTC).replace(tzinfo=None)
-
-
 def _article_from_doc(doc: dict) -> Article:
     return Article(
         id=str(doc["id"]),
@@ -123,7 +105,7 @@ def _article_from_doc(doc: dict) -> Article:
         # saved_at, not updated_at: archiving or starring moves updated_at and
         # last_moved_at but leaves saved_at alone, and a date that moved on
         # those actions would reset reading progress every time.
-        content_date=_parse_dt(doc.get("saved_at") or doc.get("created_at")),
+        content_date=parse_dt(doc.get("saved_at") or doc.get("created_at")),
     )
 
 
