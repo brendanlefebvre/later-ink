@@ -192,13 +192,13 @@ def test_epub_build_skips_private_image_without_failing():
 
     async def run():
         async with _client(handler) as client:
-            return await build_epub(
+            return (await build_epub(
                 title="SSRF",
                 author=None,
                 html_content='<img src="http://169.254.169.254/latest/meta-data/">',
                 identifier="ssrf1",
                 image_client=client,
-            )
+            )).data
 
     data = asyncio.run(run())
     assert reached == []  # the metadata endpoint was never contacted
@@ -218,10 +218,10 @@ def _build(html: str, ident: str) -> str:
 
     async def run():
         async with _client(handler) as client:
-            return await build_epub(
+            return (await build_epub(
                 title="A", author=None, html_content=html, identifier=ident,
                 image_client=client,
-            )
+            )).data
 
     with zipfile.ZipFile(io.BytesIO(asyncio.run(run()))) as zf:
         return zf.read("EPUB/chap_000.xhtml").decode()
@@ -280,11 +280,11 @@ def test_fetched_svg_is_sanitized():
 
     async def run():
         async with _client(handler) as client:
-            return await build_epub(
+            return (await build_epub(
                 title="S", author=None,
                 html_content=f'<img src="http://{PUBLIC}/a.svg">',
                 identifier="svg1", image_client=client,
-            )
+            )).data
 
     with zipfile.ZipFile(io.BytesIO(asyncio.run(run()))) as zf:
         names = [n for n in zf.namelist() if n.endswith(".svg")]
@@ -304,11 +304,11 @@ def test_malformed_svg_is_dropped_not_embedded():
 
     async def run():
         async with _client(handler) as client:
-            return await build_epub(
+            return (await build_epub(
                 title="S", author=None,
                 html_content=f'<img src="http://{PUBLIC}/bad.svg">',
                 identifier="svg2", image_client=client,
-            )
+            )).data
 
     with zipfile.ZipFile(io.BytesIO(asyncio.run(run()))) as zf:
         assert not [n for n in zf.namelist() if n.endswith(".svg")]
@@ -328,11 +328,11 @@ def test_svg_external_entities_are_not_resolved():
 
     async def run():
         async with _client(handler) as client:
-            return await build_epub(
+            return (await build_epub(
                 title="S", author=None,
                 html_content=f'<img src="http://{PUBLIC}/xxe.svg">',
                 identifier="svg3", image_client=client,
-            )
+            )).data
 
     with zipfile.ZipFile(io.BytesIO(asyncio.run(run()))) as zf:
         names = [n for n in zf.namelist() if n.endswith(".svg")]

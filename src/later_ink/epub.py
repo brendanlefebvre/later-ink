@@ -4,6 +4,7 @@ import logging
 import re
 import time
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime
 from html import escape
 
@@ -89,15 +90,26 @@ def _fallback_html(title: str, source_url: str | None) -> str:
     )
 
 
-async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
+async def _embed_images(
+    doc, client: httpx.AsyncClient
+) -> tuple[list[epub.EpubItem], bool, bool]:
     """Fetch remote <img> targets and rewrite them to in-book paths.
 
     Offline is the product's premise; a remote src renders as a broken box on
     an e-reader. Failures leave the original reference in place — a broken
     image beats a failed download.
+
+    Returns the items plus two flags: whether any fetch failed, and whether the
+    phase budget ran out. Both make the result unrepeatable — the budget is
+    wall-clock, so the same article embeds every image on a fast connection and
+    half of them on a slow one. The count and byte caps below are deliberately
+    not reported: they are limits on content, so they bite at the same image on
+    every run and the output stays stable.
     """
     items: list[epub.EpubItem] = []
     total_bytes = 0
+    images_failed = False
+    budget_exhausted = False
     deadline = time.monotonic() + IMAGE_PHASE_BUDGET
     for i, img in enumerate(doc.iter("img")):
         src = img.get("src") or ""
@@ -108,6 +120,7 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             logger.debug("image budget spent; leaving the rest of the images remote")
+            budget_exhausted = True
             break
         # src is chosen by whoever wrote the document — see fetch.py for why
         # this can't be a plain client.get.
@@ -119,6 +132,7 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
             allowed_types=_IMAGE_TYPES,
         )
         if got is None:
+            images_failed = True
             continue
         content, media_type = got
         if media_type == "image/svg+xml":
@@ -137,7 +151,7 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
             )
         )
         img.set("src", file_name)
-    return items
+    return items, images_failed, budget_exhausted
 
 
 # Attribute values that make a reader execute something. EPUB readers rarely
@@ -319,6 +333,25 @@ def _pin_zip_timestamps(data: bytes) -> bytes:
     return out.getvalue()
 
 
+@dataclass
+class BuildResult:
+    """An EPUB plus whether producing it went cleanly.
+
+    A degraded render is still served — a book missing four images beats a
+    failed download — but it must not be cached, or one bad-network request
+    freezes the worse version for every device until eviction.
+    """
+
+    data: bytes
+    fallback_used: bool = False
+    images_failed: bool = False
+    budget_exhausted: bool = False
+
+    @property
+    def clean(self) -> bool:
+        return not (self.fallback_used or self.images_failed or self.budget_exhausted)
+
+
 async def build_epub(
     title: str,
     author: str | None,
@@ -331,7 +364,7 @@ async def build_epub(
     raw_cover: bool = False,
     image_client: httpx.AsyncClient | None = None,
     content_date: datetime | None = None,
-) -> bytes:
+) -> BuildResult:
     """Convert Readwise html_content into an EPUB.
 
     Splits into per-section chapters (with a nav TOC) when the source carries
@@ -361,6 +394,9 @@ async def build_epub(
     chapters_src: list[tuple[str, str]] = []
     original_css = ""
     use_orig = False
+    images_failed = False
+    budget_exhausted = False
+    fallback_used = False
 
     owns_client = image_client is None
     client = image_client or httpx.AsyncClient()
@@ -376,7 +412,7 @@ async def build_epub(
                     parent.remove(el)
             _strip_active_content(doc)
 
-            image_items = await _embed_images(doc, client)
+            image_items, images_failed, budget_exhausted = await _embed_images(doc, client)
 
             units = _split_units(doc)
             if units is None:
@@ -389,6 +425,7 @@ async def build_epub(
             logger.warning("HTML parse failed for %r; emitting fallback page", title)
             chapters_src = [(title, _fallback_html(title, source_url))]
             use_orig = False
+            fallback_used = True
     finally:
         if owns_client:
             await client.aclose()
@@ -461,4 +498,9 @@ async def build_epub(
 
     buf = io.BytesIO()
     epub.write_epub(buf, book, {"mtime": content_date or UNKNOWN_DATE})
-    return _pin_zip_timestamps(buf.getvalue())
+    return BuildResult(
+        data=_pin_zip_timestamps(buf.getvalue()),
+        fallback_used=fallback_used,
+        images_failed=images_failed,
+        budget_exhausted=budget_exhausted,
+    )

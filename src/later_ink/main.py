@@ -788,7 +788,7 @@ async def _search_response(
 
 async def _epub_response(c: Connector, article_id: str) -> Response:
     article, html_content = await c.get_article_html(article_id)
-    epub_bytes = await build_epub(
+    result = await build_epub(
         title=article.title,
         author=article.author,
         html_content=html_content,
@@ -800,6 +800,7 @@ async def _epub_response(c: Connector, article_id: str) -> Response:
         raw_cover=(article.category == "epub"),
         content_date=article.content_date,
     )
+    epub_bytes = result.data
     safe_title = "".join(ch if ch.isalnum() or ch in " -_" else "_" for ch in article.title)
     return Response(
         content=epub_bytes,

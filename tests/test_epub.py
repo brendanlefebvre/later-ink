@@ -7,7 +7,7 @@ from datetime import datetime
 
 import httpx
 
-from later_ink.epub import ZIP_EPOCH, _pin_zip_timestamps, build_epub
+from later_ink.epub import MAX_IMAGES, ZIP_EPOCH, _pin_zip_timestamps, build_epub
 
 PNG_BYTES = bytes.fromhex(
     "89504e470d0a1a0a0000000d494844520000000100000001080600000"
@@ -33,6 +33,10 @@ def _chapter_files(zf: zipfile.ZipFile) -> list[str]:
     return sorted(n for n in zf.namelist() if n.startswith("EPUB/chap_"))
 
 
+def _image_files(zf: zipfile.ZipFile) -> list[str]:
+    return sorted(n for n in zf.namelist() if n.startswith("EPUB/images/"))
+
+
 def _spine_idrefs(zf: zipfile.ZipFile) -> list[str]:
     opf = zf.read("EPUB/content.opf").decode()
     return re.findall(r'<itemref[^>]*\bidref="([^"]+)"', opf)
@@ -41,7 +45,7 @@ def _spine_idrefs(zf: zipfile.ZipFile) -> list[str]:
 def test_single_chapter_epub():
     data = asyncio.run(
         build_epub(title="Test", author="Ann", html_content="<h1>Hi</h1><p>Body</p>", identifier="abc123")
-    )
+    ).data
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert _chapter_files(zf) == [CH0]  # no structure -> one chapter
         assert b"Body" in zf.read(CH0)
@@ -52,7 +56,7 @@ def test_single_chapter_opens_on_cover_without_toc_page():
     # one-item ToC page; they should open straight on the cover.
     data = asyncio.run(
         build_epub(title="Solo", author="Ann", html_content="<h1>Hi</h1><p>Body</p>", identifier="solo1")
-    )
+    ).data
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert _spine_idrefs(zf) == ["cover", "chap_000"]  # cover first, no nav page
         assert "EPUB/cover.xhtml" in zf.namelist()  # visible cover page rendered
@@ -65,7 +69,7 @@ def test_multi_chapter_keeps_toc_page_after_cover():
         "<section data-rw-epub-toc='rw-2'><h2>Two</h2><p>beta</p></section>"
         "</div>"
     )
-    data = asyncio.run(build_epub(title="Book", author="Auth", html_content=html, identifier="multi1"))
+    data = asyncio.run(build_epub(title="Book", author="Auth", html_content=html, identifier="multi1")).data
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         # cover opens the book; the ToC page stays because there's real structure
         assert _spine_idrefs(zf) == ["cover", "nav", "chap_000", "chap_001"]
@@ -80,7 +84,7 @@ def test_sections_split_into_chapters_with_toc():
         "<section data-rw-epub-toc='rw-3'><h2>Chapter Three</h2><p>gamma</p></section>"
         "</div>"
     )
-    data = asyncio.run(build_epub(title="Book", author="Auth", html_content=html, identifier="bk1"))
+    data = asyncio.run(build_epub(title="Book", author="Auth", html_content=html, identifier="bk1")).data
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         chapters = _chapter_files(zf)
         assert len(chapters) == 3  # one file per section
@@ -99,7 +103,7 @@ def test_preserve_styles_keeps_original_css():
     )
     data = asyncio.run(
         build_epub(title="Styled", author=None, html_content=html, identifier="s1", preserve_styles=True)
-    )
+    ).data
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert b"text-align: center" in zf.read("EPUB/style/main.css")  # original CSS kept
         chapter = zf.read("EPUB/chap_000.xhtml").decode()
@@ -109,7 +113,7 @@ def test_preserve_styles_keeps_original_css():
 
 def test_normalize_strips_original_styles_by_default():
     html = "<div><style>.verse{color:red}</style><p>plain</p></div>"
-    data = asyncio.run(build_epub(title="Norm", author=None, html_content=html, identifier="n1"))
+    data = asyncio.run(build_epub(title="Norm", author=None, html_content=html, identifier="n1")).data
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         css = zf.read("EPUB/style/main.css")
         assert b"color:red" not in css  # source style dropped
@@ -127,7 +131,7 @@ def test_nav_page_rendered_unnumbered():
         "<section data-rw-epub-toc='2'><h2>Two</h2><p>b</p></section>"
         "</div>"
     )
-    data = asyncio.run(build_epub(title="Book", author=None, html_content=html, identifier="navcss1"))
+    data = asyncio.run(build_epub(title="Book", author=None, html_content=html, identifier="navcss1")).data
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert "EPUB/style/nav.css" in zf.namelist()
         nav = zf.read("EPUB/nav.xhtml").decode()
@@ -139,13 +143,13 @@ def test_nav_page_rendered_unnumbered():
 def test_images_embedded_and_rewritten():
     async def run():
         async with _mock_client() as client:
-            return await build_epub(
+            return (await build_epub(
                 title="Pics",
                 author=None,
                 html_content='<p>x</p><img src="https://93.184.216.34/a.png">',
                 identifier="img1",
                 image_client=client,
-            )
+            )).data
 
     data = asyncio.run(run())
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
@@ -160,7 +164,7 @@ def _cover_files(zf):
 
 
 def test_generated_cover_present_without_image():
-    data = asyncio.run(build_epub(title="No Image", author="A", html_content="<p>x</p>", identifier="cov1"))
+    data = asyncio.run(build_epub(title="No Image", author="A", html_content="<p>x</p>", identifier="cov1")).data
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         covers = _cover_files(zf)
         assert covers, zf.namelist()
@@ -170,7 +174,7 @@ def test_generated_cover_present_without_image():
 def test_raw_cover_passes_original_image_through():
     async def run():
         async with _mock_client() as client:
-            return await build_epub(
+            return (await build_epub(
                 title="Book",
                 author="A",
                 html_content=(
@@ -182,7 +186,7 @@ def test_raw_cover_passes_original_image_through():
                 image_url="https://93.184.216.34/cover.png",
                 raw_cover=True,
                 image_client=client,
-            )
+            )).data
 
     data = asyncio.run(run())
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
@@ -197,13 +201,13 @@ def test_image_fetch_failure_keeps_remote_ref():
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await build_epub(
+            return (await build_epub(
                 title="Broken",
                 author=None,
                 html_content='<img src="https://93.184.216.34/gone.png">',
                 identifier="img2",
                 image_client=client,
-            )
+            )).data
 
     data = asyncio.run(run())
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
@@ -213,7 +217,7 @@ def test_image_fetch_failure_keeps_remote_ref():
 def test_epub_identifier_uses_later_ink_prefix():
     data = asyncio.run(
         build_epub(title="Test", author="Ann", html_content="<p>Body</p>", identifier="abc123")
-    )
+    ).data
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         opf = zf.read("EPUB/content.opf").decode()
         assert "later-ink-abc123" in opf
@@ -265,7 +269,7 @@ def test_pin_zip_timestamps_keeps_mimetype_first_and_stored():
 
 
 def test_build_epub_pins_every_entry_mtime():
-    data = asyncio.run(build_epub(title="T", author="A", html_content="<p>x</p>", identifier="d1"))
+    data = asyncio.run(build_epub(title="T", author="A", html_content="<p>x</p>", identifier="d1")).data
     zf = zipfile.ZipFile(io.BytesIO(data))
     assert [i.date_time for i in zf.infolist()] == [ZIP_EPOCH] * len(zf.infolist())
 
@@ -274,7 +278,7 @@ def test_build_epub_is_byte_identical_across_builds():
     def one():
         return asyncio.run(
             build_epub(title="T", author="A", html_content="<p>x</p>", identifier="d2")
-        )
+        ).data
 
     a, b = one(), one()
     assert a == b
@@ -290,7 +294,7 @@ def test_dcterms_modified_uses_content_date():
             identifier="d3",
             content_date=datetime(2025, 3, 4, 5, 6, 7),
         )
-    )
+    ).data
     opf = zipfile.ZipFile(io.BytesIO(data)).read("EPUB/content.opf").decode()
     # Two loose assertions rather than one exact element string: lxml's
     # attribute ordering and namespace prefixing are not worth pinning here.
@@ -299,6 +303,51 @@ def test_dcterms_modified_uses_content_date():
 
 
 def test_dcterms_modified_falls_back_to_sentinel():
-    data = asyncio.run(build_epub(title="T", author="A", html_content="<p>x</p>", identifier="d4"))
+    data = asyncio.run(build_epub(title="T", author="A", html_content="<p>x</p>", identifier="d4")).data
     opf = zipfile.ZipFile(io.BytesIO(data)).read("EPUB/content.opf").decode()
     assert "1980-01-01T00:00:00Z" in opf
+
+
+def test_clean_render_reports_no_degradation():
+    result = asyncio.run(build_epub(title="T", author="A", html_content="<p>x</p>", identifier="r1"))
+    assert result.clean
+    assert not result.fallback_used
+    assert not result.images_failed
+    assert not result.budget_exhausted
+
+
+def test_failed_image_fetch_marks_render_unclean():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await build_epub(
+                title="T",
+                author=None,
+                html_content='<img src="https://93.184.216.34/a.png">',
+                identifier="r2",
+                image_client=client,
+            )
+
+    result = asyncio.run(run())
+    assert result.images_failed
+    assert not result.clean
+
+
+def test_image_count_cap_still_counts_as_clean():
+    # Hitting MAX_IMAGES is a limit on content, not on the clock: the same
+    # article stops at the same image on every run, so the output is stable
+    # and safe to cache. Only the wall-clock budget and outright fetch
+    # failures make a render unrepeatable.
+    html = "".join(f'<img src="https://93.184.216.34/{i}.png">' for i in range(MAX_IMAGES + 5))
+
+    async def run():
+        async with _mock_client() as client:
+            return await build_epub(
+                title="T", author=None, html_content=html, identifier="r3", image_client=client
+            )
+
+    result = asyncio.run(run())
+    assert result.clean
+    assert len(_image_files(zipfile.ZipFile(io.BytesIO(result.data)))) == MAX_IMAGES
