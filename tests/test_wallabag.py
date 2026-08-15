@@ -1,11 +1,12 @@
 import asyncio
+from datetime import datetime
 
 import httpx
 import pytest
 
 from later_ink import config
 from later_ink.connectors.base import ArticleUnavailable
-from later_ink.connectors.wallabag import WallabagConnector
+from later_ink.connectors.wallabag import WallabagConnector, _article_from_entry
 
 ENTRIES_PAGE = {
     "page": 1,
@@ -252,3 +253,13 @@ def test_config_requires_all_fields(monkeypatch):
     cfg = config.get_wallabag_config()
     assert cfg["url"] == "https://wb.example.com"  # trailing slash stripped
     assert cfg["client_id"] == "cid"
+
+
+def test_entry_content_date_from_created_at():
+    art = _article_from_entry({"id": 1, "title": "T", "created_at": "2024-05-06T07:08:09+00:00"})
+    assert art.content_date == datetime(2024, 5, 6, 7, 8, 9)
+    assert art.content_date.tzinfo is None
+
+
+def test_entry_content_date_is_none_without_created_at():
+    assert _article_from_entry({"id": 1, "title": "T"}).content_date is None

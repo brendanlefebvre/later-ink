@@ -1,7 +1,7 @@
 import asyncio
 import re
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from html import unescape
 
 import httpx
@@ -44,9 +44,12 @@ def _parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone(UTC).replace(tzinfo=None)
 
 
 def _article_from_entry(entry: dict) -> Article:
@@ -61,6 +64,9 @@ def _article_from_entry(entry: dict) -> Article:
         "language": entry.get("language"),
         "category": "article",
         "image_url": entry.get("preview_picture"),
+        # created_at rather than updated_at, for the same reason as Readwise's
+        # saved_at: updated_at moves when the entry is archived or starred.
+        "content_date": _parse_dt(entry.get("created_at")),
     }
     updated = _parse_dt(entry.get("updated_at") or entry.get("created_at"))
     if updated is not None:

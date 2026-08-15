@@ -798,6 +798,7 @@ async def _epub_response(c: Connector, article_id: str) -> Response:
         preserve_styles=(article.category == "epub"),
         image_url=article.image_url,
         raw_cover=(article.category == "epub"),
+        content_date=article.content_date,
     )
     safe_title = "".join(ch if ch.isalnum() or ch in " -_" else "_" for ch in article.title)
     return Response(

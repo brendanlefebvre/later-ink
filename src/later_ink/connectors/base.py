@@ -42,6 +42,12 @@ class Article:
     language: str | None = None
     category: str | None = None
     image_url: str | None = None
+    # When this content entered the user's library. Feeds the EPUB's
+    # dcterms:modified, so it must be stable: a value that moves when an
+    # article is archived or starred would rewrite the file and reset the
+    # reader's progress. Distinct from `updated` above, which defaults to
+    # now() and is not usable for that.
+    content_date: datetime | None = None
 
 
 # Bound the client-side search scan for connectors without a native full-text
