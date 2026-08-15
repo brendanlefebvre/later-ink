@@ -14,7 +14,7 @@
 
 - Branch: `epub-determinism-and-opt-in-cache`. All work lands as **one PR**.
 - Lint: `ruff check src tests` must pass. Selected rules are `["E4", "E7", "E9", "F", "I", "UP"]`. **Line length is not enforced** — match surrounding style rather than wrapping to 88. Rule `I` means imports must be sorted.
-- Tests: `pytest tests/ -q` must pass. There are 89 existing tests; none may regress.
+- Tests: `pytest tests/ -q` must pass. **215 tests exist before this work starts**; none may regress. Run the suite once before Task 1 to confirm that baseline on your checkout rather than trusting this number.
 - Python floor is 3.11 (`target-version = "py311"`). Use `X | None`, not `Optional[X]`.
 - Caching is **off by default**. A deployment that sets nothing must write nothing to disk.
 - Never let the cache break a download. Every cache failure degrades to "serve the freshly built bytes."
@@ -265,7 +265,7 @@ Expected: `test_build_epub_pins_every_entry_mtime` and `test_pin_zip_timestamps_
 - [ ] **Step 6: Run the full suite and lint**
 
 Run: `pytest tests/ -q && ruff check src tests`
-Expected: PASS. All 89 pre-existing tests still pass.
+Expected: PASS. All 215 pre-existing tests still pass, plus the new ones.
 
 - [ ] **Step 7: Commit**
 
@@ -1409,7 +1409,7 @@ than of every configuration."
 
 ## Final verification
 
-- [ ] `pytest tests/ -q` — all tests pass, including the 89 that predate this work.
+- [ ] `pytest tests/ -q` — all tests pass, including the 215 that predate this work.
 - [ ] `ruff check src tests` — clean.
 - [ ] `./scripts/verify-privilege-drop.sh later-ink:test` — seven `ok:` lines, exit 0. Must pass, not be skipped.
 - [ ] `git log --oneline main..HEAD` shows eight commits, with determinism (Tasks 1–2) ahead of the cache work so it can be reverted independently.
