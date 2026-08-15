@@ -3,6 +3,8 @@ import io
 import logging
 import re
 import time
+import zipfile
+from datetime import datetime
 from html import escape
 
 import httpx
@@ -51,6 +53,28 @@ NAV_CSS = "ol { list-style: none; padding-left: 0; margin-left: 0; }"
 # Readwise tags each section of a parsed EPUB with this attribute; it's the most
 # reliable split point. Falls back to <section>, then to a single chapter.
 _TOC_ATTR = "data-rw-epub-toc"
+
+# Bumped whenever a change to this module alters the bytes it produces. It is
+# part of the cache key (cache.py), so bumping it retires every cached EPUB —
+# without it, cached and freshly built copies of the same article would
+# disagree indefinitely after a rendering change.
+BUILD_VERSION = 1
+
+# Every ZIP entry is stamped with this instead of the build time. Two downloads
+# of the same article must be byte-identical or KOReader's kosync treats them
+# as different documents and reading progress does not sync; the entry mtimes
+# sit inside the first block its hash samples. 1980-01-01 is the earliest a DOS
+# timestamp can encode and the conventional choice for reproducible archives.
+#
+# Deliberately a constant rather than an upstream date: this is container
+# plumbing carrying no semantic claim, so it stays independent of the
+# connectors. dcterms:modified is the opposite case — see build_epub.
+ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+# Used for dcterms:modified when upstream gives us no date at all. Unreachable
+# with Readwise, which always has saved_at; it exists so there is no undefined
+# branch.
+UNKNOWN_DATE = datetime(1980, 1, 1)
 
 
 def _fallback_html(title: str, source_url: str | None) -> str:
@@ -271,6 +295,30 @@ async def _fetch_cover(client: httpx.AsyncClient, url: str) -> bytes | None:
     return got[0] if got else None
 
 
+def _pin_zip_timestamps(data: bytes) -> bytes:
+    """Rewrite an archive with fixed entry timestamps.
+
+    Post-processes the finished file rather than patching ebooklib's writer:
+    this depends only on the ZIP format, not on a private API that a version
+    bump could move.
+
+    Entry order is preserved because OCF requires `mimetype` to be the first
+    entry and stored uncompressed. create_system is pinned because zipfile
+    derives it from the host platform (0 on Windows, 3 elsewhere), which would
+    otherwise make a Mac and a Linux host disagree on bytes.
+    """
+    src = zipfile.ZipFile(io.BytesIO(data))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():
+            pinned = zipfile.ZipInfo(info.filename, date_time=ZIP_EPOCH)
+            pinned.compress_type = info.compress_type
+            pinned.external_attr = info.external_attr
+            pinned.create_system = 3
+            dst.writestr(pinned, src.read(info.filename))
+    return out.getvalue()
+
+
 async def build_epub(
     title: str,
     author: str | None,
@@ -282,6 +330,7 @@ async def build_epub(
     image_url: str | None = None,
     raw_cover: bool = False,
     image_client: httpx.AsyncClient | None = None,
+    content_date: datetime | None = None,
 ) -> bytes:
     """Convert Readwise html_content into an EPUB.
 
@@ -291,6 +340,10 @@ async def build_epub(
     is normalized. A cover is always set: the hero image raw when raw_cover is
     set (epub uploads keep their designed cover), otherwise a generated cover
     (faded hero + title/author, or a clean text cover when there's no image).
+
+    content_date is when the source content entered the user's library; it
+    becomes dcterms:modified. A real date rather than a fabricated one, and a
+    stable one — see the design spec for why upstream's updated_at is not it.
     """
     book = epub.EpubBook()
 
@@ -407,5 +460,5 @@ async def build_epub(
     book.spine = spine
 
     buf = io.BytesIO()
-    epub.write_epub(buf, book)
-    return buf.getvalue()
+    epub.write_epub(buf, book, {"mtime": content_date or UNKNOWN_DATE})
+    return _pin_zip_timestamps(buf.getvalue())

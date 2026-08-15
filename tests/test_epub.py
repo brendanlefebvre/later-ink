@@ -1,11 +1,13 @@
 import asyncio
+import hashlib
 import io
 import re
 import zipfile
+from datetime import datetime
 
 import httpx
 
-from later_ink.epub import build_epub
+from later_ink.epub import ZIP_EPOCH, _pin_zip_timestamps, build_epub
 
 PNG_BYTES = bytes.fromhex(
     "89504e470d0a1a0a0000000d494844520000000100000001080600000"
@@ -216,3 +218,87 @@ def test_epub_identifier_uses_later_ink_prefix():
         opf = zf.read("EPUB/content.opf").decode()
         assert "later-ink-abc123" in opf
         assert "read-later-opds" not in opf
+
+
+def _zip_with_mtime(dt: tuple[int, int, int, int, int, int]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        mt = zipfile.ZipInfo("mimetype", date_time=dt)
+        mt.compress_type = zipfile.ZIP_STORED
+        z.writestr(mt, b"application/epub+zip")
+        z.writestr(zipfile.ZipInfo("EPUB/x.xhtml", date_time=dt), b"<html/>")
+    return buf.getvalue()
+
+
+def _partial_md5(data: bytes) -> str:
+    """KOReader's kosync document hash (frontend/util.lua partialMD5).
+
+    Twelve 1 KiB samples at exponentially increasing offsets. Binary matching
+    is kosync's default, so this is the function that decides whether reading
+    progress syncs between two devices.
+    """
+    h = hashlib.md5()
+    for off in [0] + [(1024 << (2 * i)) & 0xFFFFFFFF for i in range(11)]:
+        if off >= len(data):
+            break
+        h.update(data[off : off + 1024])
+    return h.hexdigest()
+
+
+def test_pin_zip_timestamps_normalizes_differing_mtimes():
+    # Two archives identical but for their entry mtimes must normalize to the
+    # same bytes. This is the test that fails loudly if the pinning is dropped;
+    # comparing two live builds cannot do that job, because two builds inside
+    # the same clock second are already identical and the assertion passes
+    # against completely unpinned code.
+    a = _zip_with_mtime((2026, 8, 14, 10, 0, 0))
+    b = _zip_with_mtime((2026, 8, 14, 10, 0, 2))
+    assert a != b
+    assert _pin_zip_timestamps(a) == _pin_zip_timestamps(b)
+
+
+def test_pin_zip_timestamps_keeps_mimetype_first_and_stored():
+    pinned = _pin_zip_timestamps(_zip_with_mtime((2026, 8, 14, 10, 0, 0)))
+    zf = zipfile.ZipFile(io.BytesIO(pinned))
+    assert zf.namelist()[0] == "mimetype"
+    assert zf.getinfo("mimetype").compress_type == zipfile.ZIP_STORED
+
+
+def test_build_epub_pins_every_entry_mtime():
+    data = asyncio.run(build_epub(title="T", author="A", html_content="<p>x</p>", identifier="d1"))
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    assert [i.date_time for i in zf.infolist()] == [ZIP_EPOCH] * len(zf.infolist())
+
+
+def test_build_epub_is_byte_identical_across_builds():
+    def one():
+        return asyncio.run(
+            build_epub(title="T", author="A", html_content="<p>x</p>", identifier="d2")
+        )
+
+    a, b = one(), one()
+    assert a == b
+    assert _partial_md5(a) == _partial_md5(b)
+
+
+def test_dcterms_modified_uses_content_date():
+    data = asyncio.run(
+        build_epub(
+            title="T",
+            author="A",
+            html_content="<p>x</p>",
+            identifier="d3",
+            content_date=datetime(2025, 3, 4, 5, 6, 7),
+        )
+    )
+    opf = zipfile.ZipFile(io.BytesIO(data)).read("EPUB/content.opf").decode()
+    # Two loose assertions rather than one exact element string: lxml's
+    # attribute ordering and namespace prefixing are not worth pinning here.
+    assert 'property="dcterms:modified"' in opf
+    assert "2025-03-04T05:06:07Z" in opf
+
+
+def test_dcterms_modified_falls_back_to_sentinel():
+    data = asyncio.run(build_epub(title="T", author="A", html_content="<p>x</p>", identifier="d4"))
+    opf = zipfile.ZipFile(io.BytesIO(data)).read("EPUB/content.opf").decode()
+    assert "1980-01-01T00:00:00Z" in opf
