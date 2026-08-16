@@ -99,9 +99,22 @@ class DiskEpubCache(EpubCache):
 
     def _evict(self) -> None:
         try:
-            entries = [(p.stat().st_mtime, p.stat().st_size, p) for p in self.dir.iterdir()]
+            paths = list(self.dir.iterdir())
         except OSError:
             return
+        # Stat'd one entry at a time, skipping any that vanish between the
+        # listing and the stat: another worker sharing this cache directory
+        # can be evicting or overwriting the same key concurrently. That's a
+        # miss for this entry, not a reason to abandon the whole pass — and a
+        # single stat() per file halves the window in which that race matters
+        # versus stat'ing twice for mtime and size separately.
+        entries = []
+        for p in paths:
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            entries.append((st.st_mtime, st.st_size, p))
         total = sum(size for _, size, _ in entries)
         if total <= self.max_bytes:
             return

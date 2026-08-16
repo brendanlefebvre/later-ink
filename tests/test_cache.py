@@ -61,6 +61,43 @@ def test_eviction_drops_oldest_until_under_cap(tmp_path):
     assert (tmp_path / "newest").exists()
 
 
+def test_eviction_skips_an_entry_that_vanishes_during_the_scan(tmp_path, monkeypatch):
+    import os
+    from pathlib import Path
+
+    # A cache directory can be shared by several app workers. One entry
+    # ("b") is made to really disappear mid-scan, between DiskEpubCache
+    # listing the directory and stat'ing that particular file — exactly what
+    # a peer worker's own concurrent eviction or overwrite would do. The
+    # deletion is genuine (a real unlink), not a stubbed stat() return value:
+    # monkeypatch only controls *when* it happens, not what stat() reports.
+    for name, size, age in (("a", 10, 1000), ("b", 10, 2000), ("c", 10, 3000), ("d", 10, 4000)):
+        (tmp_path / name).write_bytes(b"x" * size)
+        os.utime(tmp_path / name, (age, age))
+
+    real_stat = Path.stat
+    triggered = {"done": False}
+
+    def flaky_stat(self, *args, **kwargs):
+        if self.name == "b" and not triggered["done"]:
+            triggered["done"] = True
+            (tmp_path / "b").unlink()
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+
+    cache = DiskEpubCache(str(tmp_path), 25)
+    cache._evict()  # must not raise, and must still evict "a"
+
+    assert triggered["done"]
+    assert not (tmp_path / "a").exists()  # oldest survivor, evicted normally
+    assert not (tmp_path / "b").exists()  # vanished mid-scan, via the race
+    assert (tmp_path / "c").exists()
+    assert (tmp_path / "d").exists()
+    total = sum(p.stat().st_size for p in tmp_path.iterdir())
+    assert total <= 25
+
+
 def test_cache_directory_is_private(tmp_path):
     target = tmp_path / "cache"
     DiskEpubCache(str(target), 1024)
