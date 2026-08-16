@@ -87,3 +87,28 @@ def test_parsing_skips_comments_blanks_and_strips_quotes(env_dir, monkeypatch):
     assert os.environ["BASE_URL"] == "single"
     assert os.environ["STATS_TOKEN"] == "with=equals"
     assert "not-a-valid-line" not in os.environ
+
+
+def test_epub_cache_dir_unset_is_none(monkeypatch):
+    monkeypatch.delenv("EPUB_CACHE_DIR", raising=False)
+    assert config.get_epub_cache_dir() is None
+
+
+def test_epub_cache_dir_blank_is_none(monkeypatch):
+    monkeypatch.setenv("EPUB_CACHE_DIR", "   ")
+    assert config.get_epub_cache_dir() is None
+
+
+def test_epub_cache_dir_is_read(monkeypatch):
+    monkeypatch.setenv("EPUB_CACHE_DIR", "/data/epub-cache")
+    assert config.get_epub_cache_dir() == "/data/epub-cache"
+
+
+def test_epub_cache_max_bytes_defaults(monkeypatch):
+    monkeypatch.delenv("EPUB_CACHE_MAX_BYTES", raising=False)
+    assert config.get_epub_cache_max_bytes() == 512 * 1024 * 1024
+
+
+def test_epub_cache_max_bytes_rejects_garbage(monkeypatch):
+    monkeypatch.setenv("EPUB_CACHE_MAX_BYTES", "lots")
+    assert config.get_epub_cache_max_bytes() == 512 * 1024 * 1024

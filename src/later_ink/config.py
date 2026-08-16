@@ -167,3 +167,25 @@ def get_readwise_categories() -> tuple[str, ...]:
     if not raw:
         return ("article", "email", "pdf", "epub", "video", "tweet", "podcast")
     return tuple(c.strip() for c in raw.split(",") if c.strip())
+
+
+def get_epub_cache_dir() -> str | None:
+    """Where to cache generated EPUBs. Unset (default) = off.
+
+    Off by default because the app otherwise stores nothing: it reads the
+    queue live and holds no article content. Turning this on trades that for
+    byte-stable downloads, which is what reading-progress sync needs on an
+    article whose images are slow enough to fetch differently between runs.
+
+    In Docker, put it under /data so it lands on the volume that already
+    persists and the entrypoint can take ownership of it before dropping
+    privileges.
+    """
+    return os.environ.get("EPUB_CACHE_DIR", "").strip() or None
+
+
+def get_epub_cache_max_bytes() -> int:
+    """Total cache size before least-recently-used entries are dropped.
+
+    0 turns the cache off, matching the rate-limit settings above."""
+    return _int_env("EPUB_CACHE_MAX_BYTES", 512 * 1024 * 1024)
