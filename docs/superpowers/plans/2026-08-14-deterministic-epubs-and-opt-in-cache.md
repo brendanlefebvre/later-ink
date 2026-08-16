@@ -260,7 +260,11 @@ Expected: PASS, all tests in the file.
 
 This matters more than usual: a determinism test that passes on broken code is worse than no test. Temporarily change the last line of `build_epub` to `return buf.getvalue()`, run `pytest tests/test_epub.py -q -k "pin or dcterms or identical"`, and confirm failures. Then restore the line.
 
-Expected: `test_build_epub_pins_every_entry_mtime` and `test_pin_zip_timestamps_normalizes_differing_mtimes` FAIL. If everything still passes, the tests are wrong — fix them before continuing.
+Expected: `test_build_epub_pins_every_entry_mtime` FAILs, because reverting that line is exactly what stops the pinning from reaching the output.
+
+`test_pin_zip_timestamps_normalizes_differing_mtimes` will still **pass**, and that is correct — it calls `_pin_zip_timestamps` directly against a synthetic archive, so a change to `build_epub`'s return path cannot affect it. Do not "fix" it to fail.
+
+If `test_build_epub_pins_every_entry_mtime` still passes when the line is reverted, the test is wrong — fix it before continuing.
 
 - [ ] **Step 6: Run the full suite and lint**
 
