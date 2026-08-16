@@ -50,7 +50,8 @@ docker volume create "$vol" >/dev/null
 docker run --rm -v "$vol":/data alpine chown -R 0:0 /data
 
 docker run -d --name "$ctr" -p "$PORT":8000 \
-    -v "$vol":/data -e DATABASE_PATH=/data/app.db "$IMAGE" >/dev/null
+    -v "$vol":/data -e DATABASE_PATH=/data/app.db \
+    -e EPUB_CACHE_DIR=/data/epub-cache "$IMAGE" >/dev/null
 
 # docker run -d returns before uvicorn is listening, so poll rather than
 # asking straight away.
@@ -85,6 +86,13 @@ check "the database was created" \
 # ownership of the directory the volume put there, not just the file in it.
 check "/data is owned by $APP_UID" \
     bash -c "docker run --rm -v '$vol':/data alpine stat -c '%u:%g' /data \
+        | grep -qx '$APP_UID:$APP_UID'"
+
+# The cache directory the entrypoint was asked to create, checked the same way
+# as /data: the mount itself, from outside, since the app must own the
+# directory and not merely be able to write a file into it.
+check "/data/epub-cache is owned by $APP_UID" \
+    bash -c "docker run --rm -v '$vol':/data alpine stat -c '%u:%g' /data/epub-cache \
         | grep -qx '$APP_UID:$APP_UID'"
 
 printf '\n--- for the eye: docker top reads the host process table, and the\n'

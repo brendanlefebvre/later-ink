@@ -79,6 +79,24 @@ if [ "$(id -u)" = "0" ]; then
         [ ! -e "$db_file" ] || chown -h -- "$APP_USER:$APP_USER" "$db_file"
     done
 
+    # The EPUB cache, when configured. Same problem as DATA_DIR: a fresh
+    # volume arrives root-owned and the app cannot create or write it once
+    # unprivileged. Unset means no cache and nothing to do.
+    CACHE_DIR="${EPUB_CACHE_DIR:-}"
+    if [ -n "$CACHE_DIR" ]; then
+        mkdir -p -- "$CACHE_DIR"
+        CACHE_DIR="$(cd -P -- "$CACHE_DIR" && pwd -P)"
+        if [ "$CACHE_DIR" = "/" ]; then
+            echo "docker-entrypoint: EPUB_CACHE_DIR must be a directory, not /" >&2
+            exit 78
+        fi
+        # The directory only, not its contents. A recursive walk would scale
+        # with the number of cached books, and it is not needed: the app owns
+        # the directory, so it can replace a stale root-owned entry, and one it
+        # cannot read is treated as a cache miss and rebuilt.
+        chown -- "$APP_USER:$APP_USER" "$CACHE_DIR"
+    fi
+
     # setpriv comes from util-linux, already in the Debian base image — no
     # gosu or su-exec to install and keep pinned. --init-groups gives the
     # process the app user's supplementary groups rather than root's leftovers;
