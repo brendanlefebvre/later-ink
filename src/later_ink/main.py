@@ -5,13 +5,13 @@ import os
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
 from . import __version__, config, opds, pages
 from .connectors import readwise
@@ -207,6 +207,47 @@ async def rate_limit(request: Request, call_next):
         return _too_many(_RETRY_AFTER_FEED)
 
     return await call_next(request)
+
+
+def _canonical_host() -> str:
+    """Hostname of BASE_URL — the single host this deployment answers to."""
+    return urlsplit(config.get_base_url()).hostname or ""
+
+
+@app.middleware("http")
+async def canonical_host(request: Request, call_next):
+    """301 www.<canonical> to the bare apex, preserving path and query.
+
+    Serving the apex and www independently splits SEO across two hostnames and
+    fills the referrer log with self-referrals. Fly's force_https covers
+    http->https but does no host->host redirect, so this hop has to happen in
+    the app.
+
+    Derived from BASE_URL rather than hardcoded: BASE_URL already means "the
+    canonical origin of this deployment" (it builds the catalog URLs handed to
+    users), so a self-hoster gets the same canonicalization and no production
+    hostname is baked into the code. A host can never equal "www." + itself,
+    so this cannot redirect the apex to itself.
+
+    Registered between rate_limit and security_headers, which — since
+    add_middleware inserts at the front — puts it outside the rate limiter (a
+    redirect shouldn't spend a client's budget) and inside security_headers
+    (so the 301 still carries HSTS and the rest).
+    """
+    canonical = _canonical_host()
+    host = (request.headers.get("host") or "").partition(":")[0].strip().lower()
+    if not canonical or host != f"www.{canonical}":
+        return await call_next(request)
+
+    # raw_path is the path exactly as sent, still percent-encoded;
+    # request.url.path is decoded, which would put a literal space (or an
+    # unescaped slash) into Location and make it a different URL.
+    raw_path = request.scope.get("raw_path")
+    path = raw_path.decode("latin-1") if raw_path else quote(request.url.path)
+    target = f"{config.get_base_url()}{path}"
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return RedirectResponse(target, status_code=301)
 
 
 @app.middleware("http")
