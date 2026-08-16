@@ -5,9 +5,11 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from later_ink import main
+from later_ink.cache import cache_key
 from later_ink.connectors import readwise
 from later_ink.connectors.base import Article, Folder
 from later_ink.connectors.readwise import ReadwiseConnector
+from later_ink.epub import BUILD_VERSION
 
 SECRET_PAT = r"([a-z]+(?:-[a-z]+){3})"
 
@@ -366,5 +368,80 @@ def test_feed_ids_use_later_ink_urns(client):
         assert resp.status_code == 200
         assert "urn:later-ink:" in resp.text
         assert "read-later-opds" not in resp.text
+    finally:
+        main._connectors.clear()
+
+
+@pytest.fixture()
+def cache_client(tmp_path, monkeypatch):
+    """A client whose app started with the EPUB cache enabled.
+
+    Separate from `client` because lifespan reads the config on entry, so
+    setting the variable inside a test that already has a running app is too
+    late.
+    """
+    cache_dir = tmp_path / "epub-cache"
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("EPUB_CACHE_DIR", str(cache_dir))
+    monkeypatch.delenv("READWISE_TOKEN", raising=False)
+    with TestClient(app=main.app) as c:
+        yield c, cache_dir
+
+
+def _serve_article(monkeypatch, html: str = "<p>Body</p>") -> None:
+    async def fake_get_article_html(self, article_id):
+        return Article(id=article_id, title="Test Article", author="Ann"), html
+
+    monkeypatch.setattr(ReadwiseConnector, "get_article_html", fake_get_article_html)
+    main._connectors["readwise"] = ReadwiseConnector("good-token")
+
+
+def test_download_is_byte_identical_across_requests(client, monkeypatch):
+    _serve_article(monkeypatch)
+    try:
+        first = client.get("/opds/readwise/articles/42.epub")
+        second = client.get("/opds/readwise/articles/42.epub")
+        assert first.status_code == 200
+        assert first.content == second.content
+    finally:
+        main._connectors.clear()
+
+
+def test_clean_render_is_cached(cache_client, monkeypatch):
+    c, cache_dir = cache_client
+    _serve_article(monkeypatch)
+    try:
+        resp = c.get("/opds/readwise/articles/42.epub")
+        assert resp.status_code == 200
+        assert len(list(cache_dir.iterdir())) == 1
+
+        # A write-only cache (e.g. one whose validation no longer matches
+        # build_epub's ZIP layout) would still pass the assertion above while
+        # silently never serving anything back. Reading through the cache's
+        # own get() is the only thing that would catch that: it's what
+        # distinguishes a working cache from one that just writes files.
+        key = cache_key(BUILD_VERSION, "local", "readwise", "42")
+        assert main.app.state.epub_cache.get(key) == resp.content
+    finally:
+        main._connectors.clear()
+
+
+def test_degraded_render_is_not_cached(cache_client, monkeypatch):
+    # An image that will not fetch makes the render unclean. Caching it would
+    # serve the missing-image copy to every device until eviction, which is a
+    # worse outcome than the varying bytes the cache exists to prevent.
+    c, cache_dir = cache_client
+
+    async def no_images(*args, **kwargs):
+        return None
+
+    # Patched at the source rather than driven over the network: _epub_response
+    # builds its own httpx client, so there is no transport to inject here.
+    monkeypatch.setattr("later_ink.epub.fetch_bytes", no_images)
+    _serve_article(monkeypatch, html='<p>x</p><img src="https://93.184.216.34/a.png">')
+    try:
+        assert c.get("/opds/readwise/articles/42.epub").status_code == 200
+        assert list(cache_dir.iterdir()) == []
     finally:
         main._connectors.clear()

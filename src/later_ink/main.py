@@ -14,11 +14,12 @@ from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Reques
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
 from . import __version__, config, opds, pages
+from .cache import EpubCache, build_cache, cache_key
 from .connectors import readwise
 from .connectors.base import ArticleUnavailable, Connector, Folder, UpstreamError
 from .connectors.readwise import ReadwiseConnector
 from .connectors.wallabag import WallabagConnector
-from .epub import build_epub
+from .epub import BUILD_VERSION, build_epub
 from .payments import verify_checkout_session
 from .ratelimit import DurableLimiter, MemoryLimiter
 from .store import RESERVED_PATHS, Store
@@ -119,6 +120,9 @@ async def lifespan(app: FastAPI):
     )
     app.state.feed_limiter = MemoryLimiter(
         limit=config.get_feed_rate_limit(), window=60.0
+    )
+    app.state.epub_cache = build_cache(
+        config.get_epub_cache_dir(), config.get_epub_cache_max_bytes()
     )
     token = config.get_readwise_token()
     if token:
@@ -604,11 +608,15 @@ async def opds_search(connector: str, q: str = Query(""), cursor: str | None = Q
 
 
 @app.get("/opds/{connector}/articles/{article_id}.epub")
-async def opds_epub(connector: str, article_id: str):
+async def opds_epub(connector: str, article_id: str, request: Request):
     c = _connectors.get(connector)
     if not c:
         raise HTTPException(404, f"Connector '{connector}' not found")
-    return await _epub_response(c, article_id)
+    # Single-tenant: one user, so the key needs only a constant to occupy the
+    # slot the tenant secret fills in multi-tenant mode.
+    return await _epub_response(
+        c, article_id, cache=request.app.state.epub_cache, cache_user="local"
+    )
 
 
 @app.api_route("/opds/{connector}/{folder_id}/", methods=["GET", "HEAD"])
@@ -673,7 +681,9 @@ async def tenant_root(secret: str, request: Request):
 async def tenant_epub(secret: str, article_id: str, request: Request):
     token = _resolve_secret(secret, request)
     c = await _tenant_connector(token)
-    return await _epub_response(c, article_id)
+    return await _epub_response(
+        c, article_id, cache=request.app.state.epub_cache, cache_user=secret
+    )
 
 
 @app.api_route("/{secret}/search.xml", methods=["GET", "HEAD"])
@@ -786,21 +796,37 @@ async def _search_response(
     )
 
 
-async def _epub_response(c: Connector, article_id: str) -> Response:
+async def _epub_response(
+    c: Connector, article_id: str, *, cache: EpubCache, cache_user: str
+) -> Response:
+    # Upstream is still consulted on a cache hit: the response needs the title
+    # for its filename, and the ArticleUnavailable paths (deleted upstream, a
+    # podcast whose transcript has not loaded) must keep reporting accurately
+    # rather than serving a copy of something no longer in the account. What
+    # the cache saves is the build, and with it the byte variance the image
+    # phase introduces — not the round trip.
     article, html_content = await c.get_article_html(article_id)
-    result = await build_epub(
-        title=article.title,
-        author=article.author,
-        html_content=html_content,
-        source_url=article.url,
-        identifier=article.id,
-        language=article.language or "en",
-        preserve_styles=(article.category == "epub"),
-        image_url=article.image_url,
-        raw_cover=(article.category == "epub"),
-        content_date=article.content_date,
-    )
-    epub_bytes = result.data
+    key = cache_key(BUILD_VERSION, cache_user, c.name, article_id)
+    epub_bytes = cache.get(key)
+    if epub_bytes is None:
+        result = await build_epub(
+            title=article.title,
+            author=article.author,
+            html_content=html_content,
+            source_url=article.url,
+            identifier=article.id,
+            language=article.language or "en",
+            preserve_styles=(article.category == "epub"),
+            image_url=article.image_url,
+            raw_cover=(article.category == "epub"),
+            content_date=article.content_date,
+        )
+        epub_bytes = result.data
+        # Only a clean render is stored. A degraded one is served — a book
+        # missing four images beats a failed download — but caching it would
+        # make a transient network problem permanent.
+        if result.clean:
+            cache.put(key, epub_bytes)
     safe_title = "".join(ch if ch.isalnum() or ch in " -_" else "_" for ch in article.title)
     return Response(
         content=epub_bytes,
