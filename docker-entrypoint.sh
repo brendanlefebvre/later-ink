@@ -85,7 +85,16 @@ if [ "$(id -u)" = "0" ]; then
     CACHE_DIR="${EPUB_CACHE_DIR:-}"
     if [ -n "$CACHE_DIR" ]; then
         mkdir -p -- "$CACHE_DIR"
+        # Resolve before doing anything with it, so a relative path or one
+        # with a .. in it is the same path here as the app will use, and -P
+        # means no component of what follows is a symlink. Unlike
+        # DATABASE_PATH, EPUB_CACHE_DIR is used whole, as a directory, with no
+        # basename split — there is no DB_NAME here and so no analogous
+        # "must name a file, not a directory" guard to write.
         CACHE_DIR="$(cd -P -- "$CACHE_DIR" && pwd -P)"
+        # EPUB_CACHE_DIR=/ would otherwise put the whole filesystem in scope
+        # for the chown below. Refuse rather than proceed: 78 is EX_CONFIG,
+        # and this is one.
         if [ "$CACHE_DIR" = "/" ]; then
             echo "docker-entrypoint: EPUB_CACHE_DIR must be a directory, not /" >&2
             exit 78
