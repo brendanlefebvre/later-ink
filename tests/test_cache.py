@@ -1,5 +1,9 @@
 import io
+import os
 import zipfile
+from pathlib import Path
+
+import pytest
 
 from later_ink.cache import DiskEpubCache, EpubCache, build_cache, cache_key
 
@@ -12,6 +16,11 @@ def _epub_bytes(payload: bytes = b"<html/>") -> bytes:
         z.writestr(mt, b"application/epub+zip")
         z.writestr("EPUB/x.xhtml", payload)
     return buf.getvalue()
+
+
+def _k(label: str) -> str:
+    """A realistic entry name, since eviction only considers names it wrote."""
+    return cache_key(1, "local", "readwise", label)
 
 
 def test_disabled_cache_is_the_default(tmp_path):
@@ -47,41 +56,36 @@ def test_corrupt_entry_is_a_miss_and_is_removed(tmp_path):
 
 
 def test_eviction_drops_oldest_until_under_cap(tmp_path):
-    import os
-
     big = _epub_bytes(b"x" * 4096)
     cache = DiskEpubCache(str(tmp_path), len(big) * 2)
-    for name, age in (("old", 1000), ("mid", 2000), ("new", 3000)):
-        cache.put(name, big)
-        os.utime(tmp_path / name, (age, age))
-    cache.put("newest", big)
+    for label, age in (("old", 1000), ("mid", 2000), ("new", 3000)):
+        cache.put(_k(label), big)
+        os.utime(tmp_path / _k(label), (age, age))
+    cache.put(_k("newest"), big)
     total = sum(p.stat().st_size for p in tmp_path.iterdir())
     assert total <= len(big) * 2
-    assert not (tmp_path / "old").exists()
-    assert (tmp_path / "newest").exists()
+    assert not (tmp_path / _k("old")).exists()
+    assert (tmp_path / _k("newest")).exists()
 
 
 def test_eviction_skips_an_entry_that_vanishes_during_the_scan(tmp_path, monkeypatch):
-    import os
-    from pathlib import Path
-
     # A cache directory can be shared by several app workers. One entry
     # ("b") is made to really disappear mid-scan, between DiskEpubCache
     # listing the directory and stat'ing that particular file — exactly what
     # a peer worker's own concurrent eviction or overwrite would do. The
     # deletion is genuine (a real unlink), not a stubbed stat() return value:
     # monkeypatch only controls *when* it happens, not what stat() reports.
-    for name, size, age in (("a", 10, 1000), ("b", 10, 2000), ("c", 10, 3000), ("d", 10, 4000)):
-        (tmp_path / name).write_bytes(b"x" * size)
-        os.utime(tmp_path / name, (age, age))
+    for label, size, age in (("a", 10, 1000), ("b", 10, 2000), ("c", 10, 3000), ("d", 10, 4000)):
+        (tmp_path / _k(label)).write_bytes(b"x" * size)
+        os.utime(tmp_path / _k(label), (age, age))
 
     real_stat = Path.stat
     triggered = {"done": False}
 
     def flaky_stat(self, *args, **kwargs):
-        if self.name == "b" and not triggered["done"]:
+        if self.name == _k("b") and not triggered["done"]:
             triggered["done"] = True
-            (tmp_path / "b").unlink()
+            (tmp_path / _k("b")).unlink()
         return real_stat(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "stat", flaky_stat)
@@ -90,12 +94,70 @@ def test_eviction_skips_an_entry_that_vanishes_during_the_scan(tmp_path, monkeyp
     cache._evict()  # must not raise, and must still evict "a"
 
     assert triggered["done"]
-    assert not (tmp_path / "a").exists()  # oldest survivor, evicted normally
-    assert not (tmp_path / "b").exists()  # vanished mid-scan, via the race
-    assert (tmp_path / "c").exists()
-    assert (tmp_path / "d").exists()
+    assert not (tmp_path / _k("a")).exists()  # oldest survivor, evicted normally
+    assert not (tmp_path / _k("b")).exists()  # vanished mid-scan, via the race
+    assert (tmp_path / _k("c")).exists()
+    assert (tmp_path / _k("d")).exists()
     total = sum(p.stat().st_size for p in tmp_path.iterdir())
     assert total <= 25
+
+
+def test_eviction_never_deletes_a_file_the_cache_did_not_write(tmp_path):
+    # EPUB_CACHE_DIR=/data is a plausible thing for a self-hoster to type: the
+    # docs say to put the cache on the Docker volume, and /data is that
+    # volume — which is also where app.db lives. Eviction walks the whole
+    # directory by mtime, so without this it would delete the database (and
+    # in multi-tenant mode every user and encrypted token in it) to make room
+    # for a book.
+    stranger = tmp_path / "app.db"
+    stranger.write_bytes(b"y" * 8192)
+    subdir = tmp_path / "backups"
+    subdir.mkdir()
+
+    big = _epub_bytes(b"x" * 4096)
+    cache = DiskEpubCache(str(tmp_path), len(big))
+    cache.put(_k("a1"), big)
+    cache.put(_k("a2"), big)  # takes the total over the cap, forcing eviction
+
+    assert stranger.read_bytes() == b"y" * 8192
+    assert subdir.is_dir()
+    assert not (tmp_path / _k("a1")).exists()  # the cache still evicts its own
+
+
+def test_a_temp_file_orphaned_by_a_crash_is_reclaimable(tmp_path, monkeypatch):
+    # An entry is written to a temp file and moved into place. A crash in
+    # between leaves that temp file behind, counting against the cap forever
+    # unless eviction recognises the name as the cache's own.
+    class Crash(Exception):
+        pass
+
+    def crashing_replace(src, dst):
+        raise Crash
+
+    monkeypatch.setattr("later_ink.cache.os.replace", crashing_replace)
+    cache = DiskEpubCache(str(tmp_path), 1024)
+    with pytest.raises(Crash):
+        cache.put(_k("a1"), _epub_bytes(b"x" * 512))
+    monkeypatch.undo()
+
+    orphans = list(tmp_path.iterdir())
+    assert len(orphans) == 1
+    assert orphans[0].name.startswith(".epub-tmp-")
+
+    DiskEpubCache(str(tmp_path), 1)._evict()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_database_directory_is_refused_as_a_cache_directory(tmp_path):
+    # Defence in depth behind the name filter: a cache pointed at the volume
+    # holding app.db would also narrow that directory to 0700. Nothing about
+    # the deployment needs the two to share a directory, so refuse rather
+    # than take it over.
+    # Spelled with a ".." so the comparison is on resolved paths, not strings.
+    refused = build_cache(str(tmp_path / "epubs" / ".."), 1024, reserved_dir=str(tmp_path))
+    assert not isinstance(refused, DiskEpubCache)
+    ok = build_cache(str(tmp_path / "epubs"), 1024, reserved_dir=str(tmp_path))
+    assert isinstance(ok, DiskEpubCache)
 
 
 def test_cache_directory_is_private(tmp_path):

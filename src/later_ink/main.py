@@ -122,7 +122,9 @@ async def lifespan(app: FastAPI):
         limit=config.get_feed_rate_limit(), window=60.0
     )
     app.state.epub_cache = build_cache(
-        config.get_epub_cache_dir(), config.get_epub_cache_max_bytes()
+        config.get_epub_cache_dir(),
+        config.get_epub_cache_max_bytes(),
+        reserved_dir=os.path.dirname(os.path.abspath(config.get_database_path())),
     )
     token = config.get_readwise_token()
     if token:

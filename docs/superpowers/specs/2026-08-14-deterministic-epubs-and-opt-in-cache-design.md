@@ -333,9 +333,20 @@ lands on disk in plaintext. `_epub_response` gains a parameter for this;
 
 ## 5. Storage, eviction, concurrency
 
+- **The cache directory belongs exclusively to the cache.** It creates the
+  directory, narrows it to `0700`, and deletes from it. `EPUB_CACHE_DIR=/data`
+  is a plausible thing for a self-hoster to type — §7 tells them to put the
+  cache on the Docker volume, and `/data` *is* that volume, alongside `app.db`.
+  So the invariant cannot rest on documentation: **eviction must only consider
+  files the cache itself wrote**, recognised by name (a 64-char hex digest, or
+  the temp-file prefix used for in-progress writes). Anything else is left
+  alone and does not count against the cap. Pointing the cache at the directory
+  holding `DATABASE_PATH` is additionally refused at startup.
 - **Atomic writes.** Write to a temp file in the cache directory and
   `os.replace` into position, so a reader never sees a partial EPUB and a crash
-  mid-write leaves no corrupt entry.
+  mid-write leaves no corrupt entry. The temp file carries a fixed prefix so
+  that one orphaned by a crash between write and rename is still reclaimable by
+  eviction rather than counting against the cap forever.
 - **Concurrency.** Two devices requesting the same article simultaneously both
   build and both write. This is harmless precisely because of §1: they are
   writing identical bytes.

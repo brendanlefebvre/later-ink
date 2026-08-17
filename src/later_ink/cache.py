@@ -1,10 +1,24 @@
 import hashlib
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# The cache directory belongs exclusively to the cache: nothing else may keep
+# files there, and the cache touches nothing it did not write. Both halves are
+# enforced by name, because the plausible misconfiguration is pointing
+# EPUB_CACHE_DIR at a directory that already holds something — /data, say,
+# which is where the Docker volume and app.db live. Eviction walks the whole
+# directory by mtime, so without this filter a cache put would delete the
+# database to make room for a book.
+_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
+# Entries are written under this prefix and renamed into place. A crash in
+# between leaves the temp file behind, so eviction has to recognise it too or
+# it counts against the cap forever.
+_TMP_PREFIX = ".epub-tmp-"
 
 # A stored entry is checked before it is served. The cache is an optimisation
 # for stability, never a source of truth: because generation is deterministic,
@@ -24,6 +38,10 @@ def cache_key(build_version: int, user: str, connector: str, article_id: str) ->
     """
     raw = f"{build_version}:{user}:{connector}:{article_id}".encode()
     return hashlib.sha256(raw).hexdigest()
+
+
+def _is_ours(name: str) -> bool:
+    return bool(_KEY_RE.match(name)) or name.startswith(_TMP_PREFIX)
 
 
 def _looks_like_epub(data: bytes) -> bool:
@@ -84,7 +102,7 @@ class DiskEpubCache(EpubCache):
             # sees a partial EPUB and a crash mid-write leaves nothing corrupt.
             # Two devices racing on the same article both write, which is
             # harmless: generation is deterministic, so the bytes are identical.
-            fd, tmp = tempfile.mkstemp(dir=self.dir)
+            fd, tmp = tempfile.mkstemp(dir=self.dir, prefix=_TMP_PREFIX)
             try:
                 with os.fdopen(fd, "wb") as fh:
                     fh.write(data)
@@ -108,8 +126,13 @@ class DiskEpubCache(EpubCache):
         # miss for this entry, not a reason to abandon the whole pass — and a
         # single stat() per file halves the window in which that race matters
         # versus stat'ing twice for mtime and size separately.
+        # The cap counts only what the cache wrote, since that is all it may
+        # ever delete: a stranger's file is neither reclaimable nor ours to
+        # account for.
         entries = []
         for p in paths:
+            if not _is_ours(p.name):
+                continue
             try:
                 st = p.stat()
             except OSError:
@@ -132,13 +155,24 @@ class DiskEpubCache(EpubCache):
             return False
 
 
-def build_cache(directory: str | None, max_bytes: int) -> EpubCache:
+def build_cache(directory: str | None, max_bytes: int, reserved_dir: str | None = None) -> EpubCache:
     """The configured cache, or the disabled one.
 
     Both an unset directory and a zero cap mean off, matching how the rate
     limits in config.py read 0 as "turn it off".
+
+    reserved_dir is a directory the cache must not take over — the caller's
+    concern, passed in rather than read from config so this module stays free
+    of app dependencies. The cache claims its directory: it narrows it to 0700
+    and evicts from it. Sharing with the database would be a poor bargain even
+    now that eviction only removes entries it wrote itself.
     """
     if not directory or max_bytes <= 0:
+        return EpubCache()
+    if reserved_dir and Path(directory).resolve() == Path(reserved_dir).resolve():
+        logger.warning(
+            "EPUB cache directory %s is already in use by the database; caching is off", directory
+        )
         return EpubCache()
     try:
         return DiskEpubCache(directory, max_bytes)
