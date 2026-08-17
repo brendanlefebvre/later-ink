@@ -160,6 +160,24 @@ def test_the_database_directory_is_refused_as_a_cache_directory(tmp_path):
     assert isinstance(ok, DiskEpubCache)
 
 
+def test_a_symlink_loop_disables_the_cache_rather_than_raising(tmp_path):
+    # A cache directory that cannot be resolved has to leave the app serving
+    # books, like every other misconfiguration here — build_cache is called
+    # from lifespan, so anything escaping it stops the container from starting.
+    #
+    # Easy to get wrong: through Python 3.12 — the version the image pins —
+    # Path.resolve() reports a symlink loop as RuntimeError, which is not an
+    # OSError and which an OSError-only guard therefore lets through. On 3.13+
+    # resolve() gives up loosely and the same directory fails later inside
+    # DiskEpubCache, so this test only has teeth on the runtime that ships.
+    loop, other = tmp_path / "loop", tmp_path / "other"
+    loop.symlink_to(other)
+    other.symlink_to(loop)
+    cache = build_cache(str(loop), 1024 * 1024, reserved_dir=str(tmp_path / "db"))
+    assert not isinstance(cache, DiskEpubCache)
+    assert cache.get("k") is None
+
+
 def test_cache_directory_is_private(tmp_path):
     target = tmp_path / "cache"
     DiskEpubCache(str(target), 1024)

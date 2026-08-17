@@ -169,15 +169,25 @@ def build_cache(directory: str | None, max_bytes: int, reserved_dir: str | None 
     """
     if not directory or max_bytes <= 0:
         return EpubCache()
-    if reserved_dir and Path(directory).resolve() == Path(reserved_dir).resolve():
-        logger.warning(
-            "EPUB cache directory %s is already in use by the database; caching is off", directory
-        )
-        return EpubCache()
     try:
+        if reserved_dir and Path(directory).resolve() == Path(reserved_dir).resolve():
+            logger.warning(
+                "EPUB cache directory %s is already in use by the database; caching is off",
+                directory,
+            )
+            return EpubCache()
         return DiskEpubCache(directory, max_bytes)
-    except OSError:
+    except (OSError, RuntimeError):
         # An unusable cache directory is a misconfiguration, not a reason to
         # refuse to serve books.
+        #
+        # RuntimeError as well as OSError, and the resolve() calls inside the
+        # try rather than ahead of it: through Python 3.12 a symlink loop comes
+        # back from Path.resolve() as RuntimeError, which is not an OSError and
+        # which no handler here would otherwise catch. It would leave
+        # build_cache, leave lifespan, and take startup down — turning a
+        # mistyped EPUB_CACHE_DIR into an instance that will not boot. 3.13
+        # resolves loosely instead and the same path fails later, in
+        # DiskEpubCache; both land here.
         logger.warning("EPUB cache directory %s is unusable; caching is off", directory, exc_info=True)
         return EpubCache()
