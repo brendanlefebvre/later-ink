@@ -19,8 +19,9 @@ No plugin, no sync daemon, and nothing to install from us — ebook readers alre
 speak OPDS.
 
 **Free and open source (MIT), and built to self-host** with your own Readwise
-token. Run it on a NAS, a Raspberry Pi, a VPS, or your laptop — it stores nothing,
-reading your queue live from Readwise.
+token. Run it on a NAS, a Raspberry Pi, a VPS, or your laptop — by default it
+stores nothing, reading your queue live from Readwise. (An optional EPUB cache
+can be turned on for cross-device reading-progress sync; see below.)
 
 > **Scope:** later.ink is a *reading path, not a sync path*. It never writes
 > back to Readwise, so articles stay in your queue as you read them. If you want
@@ -42,6 +43,12 @@ reading your queue live from Readwise.
 > untouched. One cosmetic side effect: EPUB identifiers changed with the
 > rename, so a re-downloaded article registers as a new book in your
 > reader's library rather than an update to the old copy.
+
+> **Upgrading from ≤0.5.x?** EPUB files are now byte-identical between
+> downloads, which is what makes reading-progress sync work across devices.
+> Getting there changed the bytes once, so the first re-download of an article
+> you already have on a device registers as a new book and its reading position
+> starts over. This happens once.
 
 **Prebuilt image** (fastest — no checkout; amd64 & arm64, Pi included):
 
@@ -125,6 +132,49 @@ into chapters with a navigable table of contents, and every EPUB opens on a
 generated cover. A podcast converts only after you've loaded its transcript in
 Readwise Reader (until then the API returns a stub, and the download reports
 that). Configurable via `READWISE_CATEGORIES` (e.g. `article,pdf`).
+
+### Reading the same article on two devices
+
+Downloads are byte-identical for a given article, which is what
+reading-progress sync needs: KOReader's sync plugin matches documents by
+hashing the file, so two copies that differ in any way count as two different
+books and your position does not carry across.
+
+One case can still differ between downloads. Images are fetched while the EPUB
+is built, under a time limit, and any that do not arrive in time are left out.
+The same article can therefore come out slightly different on a slow connection
+than on a fast one. If you read across devices and hit this, turn on the cache:
+
+```bash
+-e EPUB_CACHE_DIR=/data/epub-cache
+```
+
+Give it a directory of its own, as above, rather than `/data` itself: the cache
+takes ownership of the directory it is given, narrowing it to `0700` and
+deleting from it to stay under the size cap.
+
+The first complete render of each article is then stored and served to every
+device afterwards. A render that lost images is never stored, so a download on
+bad wifi cannot leave you with the worse copy permanently. The cache holds 512
+MiB by default (`EPUB_CACHE_MAX_BYTES`), dropping the least recently read
+articles first, and it is off unless you set the directory — the default
+install still stores nothing.
+
+It caches the conversion, not your queue: Readwise is still contacted on every
+download, so an archived or deleted article behaves as it always did.
+
+Two things worth knowing:
+
+- Enabling it means your article text and images sit on that disk. Fine on your
+  own hardware; worth a thought on a shared host.
+- If a cached article is later re-parsed upstream, you keep the cached version
+  until it is evicted. That staleness is the trade: it is what keeps the bytes
+  stable.
+
+If you would rather not cache anything, KOReader can match documents by
+filename instead of contents (*Progress sync* → *Document matching method*).
+Filenames here are stable, so that works too — but it is a per-device setting
+that applies to your whole library.
 
 ## Hosted version
 

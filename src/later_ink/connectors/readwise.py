@@ -10,6 +10,7 @@ from .base import (
     Folder,
     UpstreamError,
     minutes_to_words,
+    parse_dt,
 )
 
 BASE_URL = "https://readwise.io/api/v3"
@@ -101,6 +102,10 @@ def _article_from_doc(doc: dict) -> Article:
         language=doc.get("language"),
         category=doc.get("category"),
         image_url=doc.get("image_url"),
+        # saved_at, not updated_at: archiving or starring moves updated_at and
+        # last_moved_at but leaves saved_at alone, and a date that moved on
+        # those actions would reset reading progress every time.
+        content_date=parse_dt(doc.get("saved_at") or doc.get("created_at")),
     )
 
 

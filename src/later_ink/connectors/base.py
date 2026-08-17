@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 class UpstreamError(Exception):
@@ -42,6 +42,12 @@ class Article:
     language: str | None = None
     category: str | None = None
     image_url: str | None = None
+    # When this content entered the user's library. Feeds the EPUB's
+    # dcterms:modified, so it must be stable: a value that moves when an
+    # article is archived or starred would rewrite the file and reset the
+    # reader's progress. Distinct from `updated` above, which defaults to
+    # now() and is not usable for that.
+    content_date: datetime | None = None
 
 
 # Bound the client-side search scan for connectors without a native full-text
@@ -66,6 +72,26 @@ VIEW_MAX_PAGES = 12
 
 def minutes_to_words(minutes: int) -> int:
     return minutes * WORDS_PER_MINUTE
+
+
+def parse_dt(value: str | None) -> datetime | None:
+    """Parse an upstream ISO timestamp as naive UTC, or None.
+
+    Shared by every connector that feeds Article.content_date: normalized to
+    UTC with the tzinfo dropped because ebooklib writes dcterms:modified with
+    strftime("%Y-%m-%dT%H:%M:%SZ") — it appends the Z without converting, so
+    an aware non-UTC value would be labelled UTC while carrying local
+    wall-clock time.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone(UTC).replace(tzinfo=None)
 
 
 def _encode_scan_cursor(folder_index: int, page: str | None) -> str:

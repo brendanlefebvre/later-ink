@@ -1,6 +1,7 @@
 import asyncio
+from datetime import datetime
 
-from later_ink.connectors.readwise import ReadwiseConnector
+from later_ink.connectors.readwise import ReadwiseConnector, _article_from_doc
 
 MIXED = {
     "results": [
@@ -67,3 +68,28 @@ def test_unloaded_podcast_stub_gives_load_transcript_message():
         asyncio.run(run())
     assert exc.value.status == 422
     assert "transcript" in str(exc.value).lower()
+
+
+def test_article_content_date_prefers_saved_at():
+    art = _article_from_doc(
+        {"id": 1, "title": "T", "saved_at": "2025-03-04T05:06:07Z", "created_at": "2024-01-01T00:00:00Z"}
+    )
+    assert art.content_date == datetime(2025, 3, 4, 5, 6, 7)
+
+
+def test_article_content_date_falls_back_to_created_at():
+    art = _article_from_doc({"id": 1, "title": "T", "created_at": "2024-01-01T00:00:00Z"})
+    assert art.content_date == datetime(2024, 1, 1, 0, 0, 0)
+
+
+def test_article_content_date_is_none_without_dates():
+    assert _article_from_doc({"id": 1, "title": "T"}).content_date is None
+
+
+def test_article_content_date_normalized_to_utc():
+    # ebooklib formats this value with strftime("%Y-%m-%dT%H:%M:%SZ") — it
+    # appends a literal Z without converting, so a non-UTC offset would be
+    # written as UTC while carrying local wall-clock time.
+    art = _article_from_doc({"id": 1, "title": "T", "saved_at": "2025-03-04T05:06:07+02:00"})
+    assert art.content_date == datetime(2025, 3, 4, 3, 6, 7)
+    assert art.content_date.tzinfo is None

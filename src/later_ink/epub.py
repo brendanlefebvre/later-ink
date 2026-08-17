@@ -3,6 +3,9 @@ import io
 import logging
 import re
 import time
+import zipfile
+from dataclasses import dataclass
+from datetime import datetime
 from html import escape
 
 import httpx
@@ -52,6 +55,33 @@ NAV_CSS = "ol { list-style: none; padding-left: 0; margin-left: 0; }"
 # reliable split point. Falls back to <section>, then to a single chapter.
 _TOC_ATTR = "data-rw-epub-toc"
 
+# Bumped whenever a change to this module alters the bytes it produces. It is
+# part of the cache key (cache.py), so bumping it retires every cached EPUB —
+# without it, cached and freshly built copies of the same article would
+# disagree indefinitely after a rendering change.
+#
+# "Alters the bytes" is not limited to code here: the output also carries
+# Pillow's cover JPEG encoding, ebooklib's OPF and nav layout, and zlib's
+# DEFLATE stream. Requirements are hash-pinned so those move only deliberately,
+# but upgrading one of them is a bump event just as much as editing this file.
+BUILD_VERSION = 1
+
+# Every ZIP entry is stamped with this instead of the build time. Two downloads
+# of the same article must be byte-identical or KOReader's kosync treats them
+# as different documents and reading progress does not sync; the entry mtimes
+# sit inside the first block its hash samples. 1980-01-01 is the earliest a DOS
+# timestamp can encode and the conventional choice for reproducible archives.
+#
+# Deliberately a constant rather than an upstream date: this is container
+# plumbing carrying no semantic claim, so it stays independent of the
+# connectors. dcterms:modified is the opposite case — see build_epub.
+ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+# Used for dcterms:modified when upstream gives us no date at all. Unreachable
+# with Readwise, which always has saved_at; it exists so there is no undefined
+# branch.
+UNKNOWN_DATE = datetime(1980, 1, 1)
+
 
 def _fallback_html(title: str, source_url: str | None) -> str:
     link = (
@@ -65,15 +95,26 @@ def _fallback_html(title: str, source_url: str | None) -> str:
     )
 
 
-async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
+async def _embed_images(
+    doc, client: httpx.AsyncClient
+) -> tuple[list[epub.EpubItem], bool, bool]:
     """Fetch remote <img> targets and rewrite them to in-book paths.
 
     Offline is the product's premise; a remote src renders as a broken box on
     an e-reader. Failures leave the original reference in place — a broken
     image beats a failed download.
+
+    Returns the items plus two flags: whether any fetch failed, and whether the
+    phase budget ran out. Both make the result unrepeatable — the budget is
+    wall-clock, so the same article embeds every image on a fast connection and
+    half of them on a slow one. The count and byte caps below are deliberately
+    not reported: they are limits on content, so they bite at the same image on
+    every run and the output stays stable.
     """
     items: list[epub.EpubItem] = []
     total_bytes = 0
+    images_failed = False
+    budget_exhausted = False
     deadline = time.monotonic() + IMAGE_PHASE_BUDGET
     for i, img in enumerate(doc.iter("img")):
         src = img.get("src") or ""
@@ -84,6 +125,7 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             logger.debug("image budget spent; leaving the rest of the images remote")
+            budget_exhausted = True
             break
         # src is chosen by whoever wrote the document — see fetch.py for why
         # this can't be a plain client.get.
@@ -95,6 +137,7 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
             allowed_types=_IMAGE_TYPES,
         )
         if got is None:
+            images_failed = True
             continue
         content, media_type = got
         if media_type == "image/svg+xml":
@@ -113,7 +156,7 @@ async def _embed_images(doc, client: httpx.AsyncClient) -> list[epub.EpubItem]:
             )
         )
         img.set("src", file_name)
-    return items
+    return items, images_failed, budget_exhausted
 
 
 # Attribute values that make a reader execute something. EPUB readers rarely
@@ -258,7 +301,16 @@ def _serialize(el) -> str:
     return re.sub(r'\s+epub:type="[^"]*"', "", xml)
 
 
-async def _fetch_cover(client: httpx.AsyncClient, url: str) -> bytes | None:
+async def _fetch_cover(client: httpx.AsyncClient, url: str) -> tuple[bytes | None, bool]:
+    """The cover image, and whether fetching it failed.
+
+    The failure has to be reported, not just tolerated: this is the same
+    network under the same timeout as the body images, so a flaky hero image
+    is the same unrepeatable output — and a cover is the most visible image in
+    the book. Without the flag a bare None is indistinguishable from "this
+    article has no hero image", and a cover-less render would be cached as if
+    it were the good one.
+    """
     # image_url comes from upstream article metadata, so it gets the same
     # treatment as an <img src> in the body.
     got = await fetch_bytes(
@@ -268,7 +320,54 @@ async def _fetch_cover(client: httpx.AsyncClient, url: str) -> bytes | None:
         max_bytes=MAX_IMAGE_BYTES,
         allowed_types=_IMAGE_TYPES,
     )
-    return got[0] if got else None
+    return (got[0] if got else None), got is None
+
+
+def _pin_zip_timestamps(data: bytes) -> bytes:
+    """Rewrite an archive with fixed entry timestamps.
+
+    Post-processes the finished file rather than patching ebooklib's writer:
+    this depends only on the ZIP format, not on a private API that a version
+    bump could move.
+
+    Entry order is preserved because OCF requires `mimetype` to be the first
+    entry and stored uncompressed. create_system is pinned because zipfile
+    derives it from the host platform (0 on Windows, 3 elsewhere), which would
+    otherwise make a Mac and a Linux host disagree on bytes. compresslevel is
+    pinned for the same reason: left unset it is whatever the linked zlib
+    defaults to, and the DEFLATE stream is most of the file. 6 is both zlib's
+    long-standing default and what ebooklib asks for, so pinning it changes no
+    bytes today — it only stops a future zlib from changing them.
+    """
+    with zipfile.ZipFile(io.BytesIO(data)) as src:
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as dst:
+            for info in src.infolist():
+                pinned = zipfile.ZipInfo(info.filename, date_time=ZIP_EPOCH)
+                pinned.compress_type = info.compress_type
+                pinned.external_attr = info.external_attr
+                pinned.create_system = 3
+                dst.writestr(pinned, src.read(info.filename))
+    return out.getvalue()
+
+
+@dataclass
+class BuildResult:
+    """An EPUB plus whether producing it went cleanly.
+
+    A degraded render is still served — a book missing four images beats a
+    failed download — but it must not be cached, or one bad-network request
+    freezes the worse version for every device until eviction.
+    """
+
+    data: bytes
+    fallback_used: bool = False
+    images_failed: bool = False
+    budget_exhausted: bool = False
+
+    @property
+    def clean(self) -> bool:
+        return not (self.fallback_used or self.images_failed or self.budget_exhausted)
 
 
 async def build_epub(
@@ -282,7 +381,8 @@ async def build_epub(
     image_url: str | None = None,
     raw_cover: bool = False,
     image_client: httpx.AsyncClient | None = None,
-) -> bytes:
+    content_date: datetime | None = None,
+) -> BuildResult:
     """Convert Readwise html_content into an EPUB.
 
     Splits into per-section chapters (with a nav TOC) when the source carries
@@ -291,6 +391,10 @@ async def build_epub(
     is normalized. A cover is always set: the hero image raw when raw_cover is
     set (epub uploads keep their designed cover), otherwise a generated cover
     (faded hero + title/author, or a clean text cover when there's no image).
+
+    content_date is when the source content entered the user's library; it
+    becomes dcterms:modified. A real date rather than a fabricated one, and a
+    stable one — see the design spec for why upstream's updated_at is not it.
     """
     book = epub.EpubBook()
 
@@ -308,11 +412,14 @@ async def build_epub(
     chapters_src: list[tuple[str, str]] = []
     original_css = ""
     use_orig = False
+    images_failed = False
+    budget_exhausted = False
+    fallback_used = False
 
     owns_client = image_client is None
     client = image_client or httpx.AsyncClient()
     try:
-        cover_src = await _fetch_cover(client, image_url) if image_url else None
+        cover_src, images_failed = await _fetch_cover(client, image_url) if image_url else (None, False)
         try:
             doc = fromstring(html_content)
             if preserve_styles:
@@ -323,7 +430,10 @@ async def build_epub(
                     parent.remove(el)
             _strip_active_content(doc)
 
-            image_items = await _embed_images(doc, client)
+            image_items, body_images_failed, budget_exhausted = await _embed_images(doc, client)
+            # Either the cover or a body image failing makes this render
+            # unrepeatable, so the flag has to survive both.
+            images_failed = images_failed or body_images_failed
 
             units = _split_units(doc)
             if units is None:
@@ -336,6 +446,7 @@ async def build_epub(
             logger.warning("HTML parse failed for %r; emitting fallback page", title)
             chapters_src = [(title, _fallback_html(title, source_url))]
             use_orig = False
+            fallback_used = True
     finally:
         if owns_client:
             await client.aclose()
@@ -407,5 +518,10 @@ async def build_epub(
     book.spine = spine
 
     buf = io.BytesIO()
-    epub.write_epub(buf, book)
-    return buf.getvalue()
+    epub.write_epub(buf, book, {"mtime": content_date or UNKNOWN_DATE})
+    return BuildResult(
+        data=_pin_zip_timestamps(buf.getvalue()),
+        fallback_used=fallback_used,
+        images_failed=images_failed,
+        budget_exhausted=budget_exhausted,
+    )
