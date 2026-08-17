@@ -149,6 +149,10 @@ than on a fast one. If you read across devices and hit this, turn on the cache:
 -e EPUB_CACHE_DIR=/data/epub-cache
 ```
 
+Give it a directory of its own, as above, rather than `/data` itself: the cache
+takes ownership of the directory it is given, narrowing it to `0700` and
+deleting from it to stay under the size cap.
+
 The first complete render of each article is then stored and served to every
 device afterwards. A render that lost images is never stored, so a download on
 bad wifi cannot leave you with the worse copy permanently. The cache holds 512

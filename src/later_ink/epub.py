@@ -59,6 +59,11 @@ _TOC_ATTR = "data-rw-epub-toc"
 # part of the cache key (cache.py), so bumping it retires every cached EPUB —
 # without it, cached and freshly built copies of the same article would
 # disagree indefinitely after a rendering change.
+#
+# "Alters the bytes" is not limited to code here: the output also carries
+# Pillow's cover JPEG encoding, ebooklib's OPF and nav layout, and zlib's
+# DEFLATE stream. Requirements are hash-pinned so those move only deliberately,
+# but upgrading one of them is a bump event just as much as editing this file.
 BUILD_VERSION = 1
 
 # Every ZIP entry is stamped with this instead of the build time. Two downloads
@@ -328,17 +333,21 @@ def _pin_zip_timestamps(data: bytes) -> bytes:
     Entry order is preserved because OCF requires `mimetype` to be the first
     entry and stored uncompressed. create_system is pinned because zipfile
     derives it from the host platform (0 on Windows, 3 elsewhere), which would
-    otherwise make a Mac and a Linux host disagree on bytes.
+    otherwise make a Mac and a Linux host disagree on bytes. compresslevel is
+    pinned for the same reason: left unset it is whatever the linked zlib
+    defaults to, and the DEFLATE stream is most of the file. 6 is both zlib's
+    long-standing default and what ebooklib asks for, so pinning it changes no
+    bytes today — it only stops a future zlib from changing them.
     """
-    src = zipfile.ZipFile(io.BytesIO(data))
-    out = io.BytesIO()
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
-        for info in src.infolist():
-            pinned = zipfile.ZipInfo(info.filename, date_time=ZIP_EPOCH)
-            pinned.compress_type = info.compress_type
-            pinned.external_attr = info.external_attr
-            pinned.create_system = 3
-            dst.writestr(pinned, src.read(info.filename))
+    with zipfile.ZipFile(io.BytesIO(data)) as src:
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as dst:
+            for info in src.infolist():
+                pinned = zipfile.ZipInfo(info.filename, date_time=ZIP_EPOCH)
+                pinned.compress_type = info.compress_type
+                pinned.external_attr = info.external_attr
+                pinned.create_system = 3
+                dst.writestr(pinned, src.read(info.filename))
     return out.getvalue()
 
 
