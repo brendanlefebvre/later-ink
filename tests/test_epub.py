@@ -335,6 +335,58 @@ def test_failed_image_fetch_marks_render_unclean():
     assert not result.clean
 
 
+def _hero_png() -> bytes:
+    # A real picture rather than PNG_BYTES: the generated cover fades a hero
+    # image behind the title, and a 1x1 transparent pixel composites to the
+    # same cover as no image at all, which would hide the very difference
+    # these tests are about.
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (600, 400), (12, 90, 200)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _build_with_cover(status: int, identifier: str, raw_cover: bool = False):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if status != 200:
+            return httpx.Response(status)
+        return httpx.Response(200, content=_hero_png(), headers={"content-type": "image/png"})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await build_epub(
+                title="T",
+                author="A",
+                html_content="<p>x</p>",
+                identifier=identifier,
+                image_url="https://93.184.216.34/hero.png",
+                raw_cover=raw_cover,
+                image_client=client,
+            )
+
+    return asyncio.run(run())
+
+
+def test_failed_cover_fetch_marks_render_unclean():
+    # The hero image is fetched over the same network as the body images and
+    # fails the same way, so it is the same unrepeatable-output problem: a
+    # cover-less render is different bytes, and caching it would freeze the
+    # most visible image in the book missing.
+    good = _build_with_cover(200, "c1")
+    bad = _build_with_cover(500, "c1")
+    assert good.data != bad.data
+    assert good.clean
+    assert bad.images_failed
+    assert not bad.clean
+
+
+def test_failed_cover_fetch_on_an_upload_marks_render_unclean():
+    # Worse for an uploaded EPUB: raw_cover means the author's own cover is
+    # what was lost, and a generated one silently takes its place.
+    assert not _build_with_cover(500, "c2", raw_cover=True).clean
+
+
 def test_image_count_cap_still_counts_as_clean():
     # Hitting MAX_IMAGES is a limit on content, not on the clock: the same
     # article stops at the same image on every run, so the output is stable

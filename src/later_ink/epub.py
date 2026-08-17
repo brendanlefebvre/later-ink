@@ -296,7 +296,16 @@ def _serialize(el) -> str:
     return re.sub(r'\s+epub:type="[^"]*"', "", xml)
 
 
-async def _fetch_cover(client: httpx.AsyncClient, url: str) -> bytes | None:
+async def _fetch_cover(client: httpx.AsyncClient, url: str) -> tuple[bytes | None, bool]:
+    """The cover image, and whether fetching it failed.
+
+    The failure has to be reported, not just tolerated: this is the same
+    network under the same timeout as the body images, so a flaky hero image
+    is the same unrepeatable output — and a cover is the most visible image in
+    the book. Without the flag a bare None is indistinguishable from "this
+    article has no hero image", and a cover-less render would be cached as if
+    it were the good one.
+    """
     # image_url comes from upstream article metadata, so it gets the same
     # treatment as an <img src> in the body.
     got = await fetch_bytes(
@@ -306,7 +315,7 @@ async def _fetch_cover(client: httpx.AsyncClient, url: str) -> bytes | None:
         max_bytes=MAX_IMAGE_BYTES,
         allowed_types=_IMAGE_TYPES,
     )
-    return got[0] if got else None
+    return (got[0] if got else None), got is None
 
 
 def _pin_zip_timestamps(data: bytes) -> bytes:
@@ -401,7 +410,7 @@ async def build_epub(
     owns_client = image_client is None
     client = image_client or httpx.AsyncClient()
     try:
-        cover_src = await _fetch_cover(client, image_url) if image_url else None
+        cover_src, images_failed = await _fetch_cover(client, image_url) if image_url else (None, False)
         try:
             doc = fromstring(html_content)
             if preserve_styles:
@@ -412,7 +421,10 @@ async def build_epub(
                     parent.remove(el)
             _strip_active_content(doc)
 
-            image_items, images_failed, budget_exhausted = await _embed_images(doc, client)
+            image_items, body_images_failed, budget_exhausted = await _embed_images(doc, client)
+            # Either the cover or a body image failing makes this render
+            # unrepeatable, so the flag has to survive both.
+            images_failed = images_failed or body_images_failed
 
             units = _split_units(doc)
             if units is None:

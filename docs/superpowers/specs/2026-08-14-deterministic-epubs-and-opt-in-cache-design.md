@@ -219,9 +219,17 @@ undefined branch.
 
 ## 3. Only clean renders are cached
 
-`build_epub` degrades silently in two places: an unparseable document becomes
-`_fallback_html`, and `_embed_images` drops images. Both return a valid EPUB
-that is worse than the one a good run produces.
+`build_epub` degrades silently in three places: an unparseable document becomes
+`_fallback_html`, `_embed_images` drops images, and `_fetch_cover` returns
+nothing when the hero image will not fetch. Each returns a valid EPUB that is
+worse than the one a good run produces.
+
+The cover is easy to overlook — it is fetched before the document is even
+parsed, and its failure looks exactly like "this article has no hero image" —
+but it runs over the same network under the same timeout as the body images,
+so the §3 test below catches it just the same. It is also the most visible
+image in the book, and for an uploaded EPUB (`raw_cover`) a failed fetch
+replaces the author's own designed cover with a generated one.
 
 If the cache stored whatever the first request produced, **one bad-network
 download would freeze the degraded version permanently** — the
@@ -244,12 +252,15 @@ class BuildResult:
         return not (self.fallback_used or self.images_failed or self.budget_exhausted)
 ```
 
-`_embed_images` returns its drop reasons alongside its items.
+`_embed_images` returns its drop reasons alongside its items, and `_fetch_cover`
+returns whether it failed alongside the bytes — a bare `None` cannot carry that,
+since it is also what "no hero image" looks like.
 
 **Distinguish nondeterministic drops from deterministic caps.** Only these
 make a render unclean:
 
-- `fetch_bytes` returned `None` (network failure) → `images_failed`
+- `fetch_bytes` returned `None` for a body image *or the cover* (network
+  failure) → `images_failed`
 - the wall-clock `IMAGE_PHASE_BUDGET` expired → `budget_exhausted`
 - the HTML failed to parse → `fallback_used`
 
