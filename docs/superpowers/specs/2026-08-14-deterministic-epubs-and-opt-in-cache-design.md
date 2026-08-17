@@ -419,22 +419,36 @@ The cache is never allowed to break a download.
 
 **The determinism test has a trap.** Two builds inside the same second are
 byte-identical *even without the fix*, so a naive test passes against broken
-code. The test must force a clock difference — monkeypatch the `time.time` that
-`zipfile` consults, build again, assert equality — rather than call `sleep`.
-This must be a test that genuinely fails when the fix is reverted; verify that
-during implementation.
+code. The test has to make the clock difference real rather than hope for one,
+and must genuinely fail when the fix is reverted; verify that during
+implementation.
+
+*As built:* rather than monkeypatching the `time.time` that `zipfile` consults,
+the test feeds `_pin_zip_timestamps` two synthetic archives that are identical
+but for explicitly different `date_time` values, and asserts the pinned output
+matches. Same trap avoided, with no clock manipulation and no dependence on how
+`zipfile` reads the time — and verified to fail on revert. The whole-build test
+alongside it asserts byte-identity across two live builds, which is the property
+users experience but, on its own, would pass against unpinned code.
 
 `tests/test_epub.py` gains:
 
-- Byte-identity across a forced clock change (per above).
+- Timestamp pinning proven against a forced mtime difference (per above), plus
+  byte-identity across two live builds.
 - `mimetype` is the first entry and `ZIP_STORED`.
 - All entry mtimes equal `ZIP_EPOCH`.
 - `dcterms:modified` equals the `content_date` passed in, and the sentinel when
   it is `None`.
 - A test implementing KOReader's `partialMD5` and asserting it matches across
   two builds — the property users actually experience.
-- `BuildResult` flags: clean render, fetch-failure render, budget-exhausted
+- `BuildResult` flags: clean render, body-image fetch failure, **cover fetch
+  failure** (both the generated and the `raw_cover` case), budget-exhausted
   render, fallback render, and that a `MAX_IMAGES` cap still counts as clean.
+  Every flag needs a test that drives it *true*; an `assert not result.flag` in
+  the clean case does not catch an assignment lost in a refactor. Empty
+  `html_content` reaches the fallback branch, and
+  `monkeypatch.setattr("later_ink.epub.IMAGE_PHASE_BUDGET", 0)` reaches the
+  budget branch, so both are cheap.
 
 New `tests/test_cache.py`:
 
@@ -442,12 +456,17 @@ New `tests/test_cache.py`:
 - Hit and miss paths.
 - A degraded render is served but not stored.
 - Eviction drops the oldest entries and respects the cap.
+- Eviction leaves a file the cache did not write, even when that means staying
+  over the cap; an orphaned temp file is still reclaimed (§5).
 - A corrupt entry is a miss and is unlinked.
 - An `OSError` on write still serves the response.
 - Changing `BUILD_VERSION` changes the key.
 
 `tests/test_app.py`: the download route returns identical bytes on two calls,
-with the cache both enabled and disabled.
+with the cache both enabled and disabled — and, with it enabled, `build_epub`
+is called *once* across the two requests. Counting builds is the only assertion
+that observes the hit path; reading the entry back only proves the cache is not
+write-only.
 
 ## 10. Documentation and migration
 

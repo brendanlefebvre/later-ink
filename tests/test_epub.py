@@ -335,6 +335,39 @@ def test_failed_image_fetch_marks_render_unclean():
     assert not result.clean
 
 
+def test_unparseable_html_falls_back_and_marks_render_unclean():
+    # The fallback page is the worst thing that can reach the cache: it
+    # replaces the whole article with "could not be converted", and entries
+    # have no TTL, so freezing one is permanent from the reader's side.
+    result = asyncio.run(build_epub(title="T", author="A", html_content="", identifier="r4"))
+    assert result.fallback_used
+    assert not result.clean
+    with zipfile.ZipFile(io.BytesIO(result.data)) as zf:
+        assert b"could not be converted" in zf.read(CH0)
+
+
+def test_exhausted_image_budget_marks_render_unclean(monkeypatch):
+    # The budget is wall-clock, so how much of the article gets embedded
+    # depends on the connection rather than on the article. Zero is the
+    # already-spent case, which is what a slow enough network arrives at.
+    monkeypatch.setattr("later_ink.epub.IMAGE_PHASE_BUDGET", 0)
+
+    async def run():
+        async with _mock_client() as client:
+            return await build_epub(
+                title="T",
+                author=None,
+                html_content='<img src="https://93.184.216.34/a.png">',
+                identifier="r5",
+                image_client=client,
+            )
+
+    result = asyncio.run(run())
+    assert result.budget_exhausted
+    assert not result.clean
+    assert _image_files(zipfile.ZipFile(io.BytesIO(result.data))) == []
+
+
 def _hero_png() -> bytes:
     # A real picture rather than PNG_BYTES: the generated cover fades a hero
     # image behind the title, and a 1x1 transparent pixel composites to the
