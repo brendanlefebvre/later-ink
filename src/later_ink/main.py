@@ -461,10 +461,20 @@ async def og_image():
 
 @app.get("/health")
 async def health():
+    cache: EpubCache | None = getattr(app.state, "epub_cache", None)
     return {
         "status": "ok",
         "self_host_connectors": list(_connectors.keys()),
         "signup": "free" if config.allow_free_signup() else "paid",
+        # Reported but not failed here: Fly probes this path, so a 503 would
+        # roll the deploy back and a later machine restart could not come up —
+        # a hard refusal over an optional feature. /healthz, which only Docker
+        # reads, is where it goes unhealthy.
+        "epub_cache": (
+            cache.misconfigured or ("on" if cache.enabled else "off")
+            if cache is not None
+            else "off"
+        ),
     }
 
 
@@ -475,6 +485,15 @@ async def healthz():
     # and leaks nothing (no connector names or config).
     if getattr(app.state, "store", None) is None:
         raise HTTPException(503, "starting up")
+    # A cache that was configured and is not running fails the probe. It is the
+    # one misconfiguration here with no visible symptom: downloads still work,
+    # and the consequence — reading progress not syncing — surfaces on a
+    # different device, days later, looking like a bug rather than a setting.
+    # The detail names the variable and not its value; this endpoint is
+    # unauthenticated.
+    cache = getattr(app.state, "epub_cache", None)
+    if cache is not None and cache.misconfigured:
+        raise HTTPException(503, cache.misconfigured)
     return {"status": "ok"}
 
 

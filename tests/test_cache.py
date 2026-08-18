@@ -178,6 +178,47 @@ def test_a_symlink_loop_disables_the_cache_rather_than_raising(tmp_path):
     assert cache.get("k") is None
 
 
+def test_a_cache_that_was_never_asked_for_is_not_misconfigured(tmp_path):
+    # The default. Nothing to report: not opting in is not a mistake.
+    assert build_cache(None, 1024).misconfigured is None
+    assert build_cache(str(tmp_path), 0).misconfigured is None
+
+
+def test_a_cache_that_was_asked_for_and_refused_reports_why(tmp_path):
+    # Asked for and not running is the case worth surfacing — /healthz turns it
+    # into an unhealthy container, because nothing else about the deployment
+    # looks wrong when caching quietly does not happen.
+    collided = build_cache(str(tmp_path), 1024, reserved_dir=str(tmp_path))
+    assert collided.misconfigured
+    assert not collided.enabled
+
+    loop, other = tmp_path / "loop", tmp_path / "other"
+    loop.symlink_to(other)
+    other.symlink_to(loop)
+    unusable = build_cache(str(loop), 1024, reserved_dir=str(tmp_path / "db"))
+    assert unusable.misconfigured
+    assert not unusable.enabled
+
+
+def test_the_reported_reason_never_echoes_the_configured_path(tmp_path):
+    # /healthz is unauthenticated and documents that it leaks no config, so the
+    # message names the variable rather than its value. The operator set the
+    # path and does not need telling; a stranger probing the endpoint does.
+    secret = tmp_path / "srv" / "brendans-private-volume"
+    secret.mkdir(parents=True)
+    reason = build_cache(str(secret), 1024, reserved_dir=str(secret)).misconfigured
+    assert "EPUB_CACHE_DIR" in reason
+    assert str(secret) not in reason
+    assert "brendans-private-volume" not in reason
+
+
+def test_a_working_cache_reports_nothing(tmp_path):
+    cache = build_cache(str(tmp_path / "epubs"), 1024, reserved_dir=str(tmp_path / "db"))
+    assert isinstance(cache, DiskEpubCache)
+    assert cache.enabled
+    assert cache.misconfigured is None
+
+
 def test_cache_directory_is_private(tmp_path):
     target = tmp_path / "cache"
     DiskEpubCache(str(target), 1024)

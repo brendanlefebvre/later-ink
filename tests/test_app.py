@@ -115,6 +115,49 @@ def test_healthz_liveness(client):
     assert client.head("/healthz").status_code == 200
 
 
+def _client_with_cache_dir(tmp_path, monkeypatch, cache_dir):
+    """A started app whose EPUB_CACHE_DIR is cache_dir, with the DB in tmp_path.
+
+    Separate from the `client` fixture because lifespan reads the cache config
+    on entry — setting the variable inside a test whose app is already running
+    is too late.
+    """
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("EPUB_CACHE_DIR", cache_dir)
+    monkeypatch.delenv("READWISE_TOKEN", raising=False)
+    return TestClient(app=main.app)
+
+
+def test_healthz_fails_when_a_configured_cache_is_not_running(tmp_path, monkeypatch):
+    # EPUB_CACHE_DIR pointed at the database's own directory is refused, which
+    # is right — but the container would otherwise come up healthy with caching
+    # silently off, and the only symptom appears on another device days later.
+    with _client_with_cache_dir(tmp_path, monkeypatch, str(tmp_path)) as c:
+        resp = c.get("/healthz")
+        assert resp.status_code == 503
+        assert "EPUB_CACHE_DIR" in resp.json()["detail"]
+        # Unauthenticated endpoint: names the variable, never its value.
+        assert str(tmp_path) not in resp.json()["detail"]
+        # /health stays 200 — Fly probes it, and a 503 there would roll the
+        # deploy back over an optional feature.
+        health = c.get("/health")
+        assert health.status_code == 200
+        assert "EPUB_CACHE_DIR" in health.json()["epub_cache"]
+
+
+def test_healthz_stays_healthy_with_a_working_cache(tmp_path, monkeypatch):
+    with _client_with_cache_dir(tmp_path, monkeypatch, str(tmp_path / "epub-cache")) as c:
+        assert c.get("/healthz").status_code == 200
+        assert c.get("/health").json()["epub_cache"] == "on"
+
+
+def test_healthz_stays_healthy_when_caching_was_never_enabled(client):
+    # The default deployment. Not opting in is not a misconfiguration.
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/health").json()["epub_cache"] == "off"
+
+
 def test_version_endpoint(client):
     resp = client.get("/version")
     assert resp.status_code == 200

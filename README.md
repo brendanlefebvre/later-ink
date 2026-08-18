@@ -151,7 +151,15 @@ than on a fast one. If you read across devices and hit this, turn on the cache:
 
 Give it a directory of its own, as above, rather than `/data` itself: the cache
 takes ownership of the directory it is given, narrowing it to `0700` and
-deleting from it to stay under the size cap.
+deleting from it to stay under the size cap. Point it at `/data` and it refuses
+to run rather than share with the database.
+
+If you set `EPUB_CACHE_DIR` and the cache cannot use it — that collision, or a
+directory it cannot write — the container reports **unhealthy** (`docker ps`,
+or `/healthz`) while carrying on serving. That is deliberate: caching that is
+quietly off looks exactly like caching that works, and you would find out from
+a device whose reading position stopped syncing, days later. `/health` names
+the problem.
 
 The first complete render of each article is then stored and served to every
 device afterwards. A render that lost images is never stored, so a download on
