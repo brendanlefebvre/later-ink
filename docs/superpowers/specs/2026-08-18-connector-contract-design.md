@@ -24,7 +24,7 @@ wallabag.list_articles: UpstreamError (readable) — Wallabag returned an unexpe
 The Readwise path raises `json.JSONDecodeError`, which is not `UpstreamError`,
 so it escapes as a 500 instead of a readable message on the e-reader.
 
-**One unwritten requirement is now load-bearing.** The determinism work in 0.6.0
+**One unwritten requirement now has 0.6.0 resting on it.** The determinism work
 made `dcterms:modified` come from `Article.content_date`, and ebooklib formats it
 with `strftime("%Y-%m-%dT%H:%M:%SZ")` — appending a literal `Z` without
 converting. A connector returning a timezone-aware datetime therefore writes a
