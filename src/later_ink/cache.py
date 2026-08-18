@@ -54,6 +54,22 @@ def _looks_like_epub(data: bytes) -> bool:
 class EpubCache:
     """The disabled cache: every deployment gets this unless it opts in."""
 
+    enabled = False
+
+    # Why a cache the operator asked for is not running, or None. An unset
+    # EPUB_CACHE_DIR leaves this None — that is the default, not a mistake.
+    #
+    # It exists because a quietly-disabled cache is indistinguishable from a
+    # working one from the outside: downloads still succeed, and the symptom
+    # (reading progress not syncing) turns up on a different device, days
+    # later. /healthz reports it so the container goes visibly unhealthy
+    # instead. The message names the variable and never its value — /healthz
+    # is unauthenticated and deliberately leaks no configuration.
+    misconfigured: str | None = None
+
+    def __init__(self, misconfigured: str | None = None):
+        self.misconfigured = misconfigured
+
     def get(self, key: str) -> bytes | None:
         return None
 
@@ -68,6 +84,8 @@ class DiskEpubCache(EpubCache):
     download, so every filesystem error here degrades to a miss rather than
     propagating to the request.
     """
+
+    enabled = True
 
     def __init__(self, directory: str, max_bytes: int):
         self.dir = Path(directory)
@@ -175,7 +193,7 @@ def build_cache(directory: str | None, max_bytes: int, reserved_dir: str | None 
                 "EPUB cache directory %s is already in use by the database; caching is off",
                 directory,
             )
-            return EpubCache()
+            return EpubCache("EPUB_CACHE_DIR is the database directory; caching is off")
         return DiskEpubCache(directory, max_bytes)
     except (OSError, RuntimeError):
         # An unusable cache directory is a misconfiguration, not a reason to
@@ -190,4 +208,4 @@ def build_cache(directory: str | None, max_bytes: int, reserved_dir: str | None 
         # resolves loosely instead and the same path fails later, in
         # DiskEpubCache; both land here.
         logger.warning("EPUB cache directory %s is unusable; caching is off", directory, exc_info=True)
-        return EpubCache()
+        return EpubCache("EPUB_CACHE_DIR is unusable; caching is off")
