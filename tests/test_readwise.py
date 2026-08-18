@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime
 
+import httpx
+
 from later_ink.connectors.readwise import ReadwiseConnector, _article_from_doc
 
 MIXED = {
@@ -93,3 +95,26 @@ def test_article_content_date_normalized_to_utc():
     art = _article_from_doc({"id": 1, "title": "T", "saved_at": "2025-03-04T05:06:07+02:00"})
     assert art.content_date == datetime(2025, 3, 4, 3, 6, 7)
     assert art.content_date.tzinfo is None
+
+
+def test_an_injected_client_is_used_instead_of_a_real_one():
+    # The seam the contract suite needs: a connector must be constructable
+    # against a mock transport without reaching into its privates.
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"results": [], "nextPageCursor": None})
+
+    async def run():
+        client = httpx.AsyncClient(
+            base_url="https://readwise.test", transport=httpx.MockTransport(handler)
+        )
+        conn = ReadwiseConnector("tok", client=client)
+        try:
+            await conn.list_articles("later")
+        finally:
+            await conn.close()
+
+    asyncio.run(run())
+    assert seen and "readwise.test" in seen[0]

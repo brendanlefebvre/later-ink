@@ -79,6 +79,7 @@ class WallabagConnector(Connector):
         client_secret: str,
         username: str,
         password: str,
+        client: httpx.AsyncClient | None = None,
     ):
         self._creds = {
             "client_id": client_id,
@@ -86,7 +87,7 @@ class WallabagConnector(Connector):
             "username": username,
             "password": password,
         }
-        self._client = httpx.AsyncClient(base_url=url.rstrip("/"), timeout=30.0)
+        self._client = client or httpx.AsyncClient(base_url=url.rstrip("/"), timeout=30.0)
         self._access_token: str | None = None
         self._refresh_token: str | None = None
         self._expiry = 0.0

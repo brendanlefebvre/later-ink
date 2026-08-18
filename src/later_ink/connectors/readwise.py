@@ -113,10 +113,18 @@ class ReadwiseConnector(Connector):
     name = "readwise"
     description = "Readwise Reader"
 
-    def __init__(self, token: str, categories: tuple[str, ...] = DEFAULT_CATEGORIES):
+    def __init__(
+        self,
+        token: str,
+        categories: tuple[str, ...] = DEFAULT_CATEGORIES,
+        client: httpx.AsyncClient | None = None,
+    ):
         self._token = token
         self._categories = set(categories)
-        self._client = httpx.AsyncClient(
+        # An injected client is taken as-is, including its auth: the caller that
+        # supplies one is a test with a mock transport, and giving it the real
+        # base URL would send those requests somewhere unintended.
+        self._client = client or httpx.AsyncClient(
             base_url=BASE_URL,
             headers={"Authorization": f"Token {token}"},
             timeout=30.0,
