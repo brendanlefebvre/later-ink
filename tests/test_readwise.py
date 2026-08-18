@@ -2,7 +2,9 @@ import asyncio
 from datetime import datetime
 
 import httpx
+import pytest
 
+from later_ink.connectors.base import UpstreamError
 from later_ink.connectors.readwise import ReadwiseConnector, _article_from_doc
 
 MIXED = {
@@ -118,3 +120,26 @@ def test_an_injected_client_is_used_instead_of_a_real_one():
 
     asyncio.run(run())
     assert seen and "readwise.test" in seen[0]
+
+
+def test_a_non_json_response_is_reported_as_an_upstream_error():
+    # An HTTP 200 carrying a proxy error page rather than JSON. Left unguarded
+    # this raises JSONDecodeError, which is not UpstreamError, so it escapes as
+    # a 500 instead of a readable message on the e-reader.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html><body>502 Bad Gateway</body></html>")
+
+    async def run():
+        conn = ReadwiseConnector(
+            "tok",
+            client=httpx.AsyncClient(
+                base_url="https://readwise.test", transport=httpx.MockTransport(handler)
+            ),
+        )
+        try:
+            with pytest.raises(UpstreamError):
+                await conn.list_articles("later")
+        finally:
+            await conn.close()
+
+    asyncio.run(run())

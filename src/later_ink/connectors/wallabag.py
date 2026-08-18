@@ -11,7 +11,10 @@ from .base import (
     Connector,
     Folder,
     UpstreamError,
+    decode_json,
     parse_dt,
+    raise_for_upstream,
+    retry_after_seconds,
 )
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -160,23 +163,11 @@ class WallabagConnector(Connector):
                 self._refresh_token = None  # force a fresh password grant
                 continue
             if resp.status_code == 429 and attempt == 0:
-                try:
-                    delay = min(float(resp.headers.get("Retry-After", "2")), 15.0)
-                except ValueError:
-                    delay = 2.0
-                await asyncio.sleep(delay)
+                await asyncio.sleep(retry_after_seconds(resp))
                 continue
             break
-        if resp.status_code == 401:
-            raise UpstreamError("Wallabag rejected the stored credentials", 401)
-        if resp.status_code == 429:
-            raise UpstreamError("Wallabag is rate-limiting; try again in a minute", 429)
-        if resp.status_code >= 400:
-            raise UpstreamError(f"Wallabag returned an error ({resp.status_code})", resp.status_code)
-        try:
-            return resp.json()
-        except ValueError as e:
-            raise UpstreamError("Wallabag returned an unexpected response") from e
+        raise_for_upstream(resp, "Wallabag")
+        return decode_json(resp, "Wallabag")
 
     async def list_folders(self) -> list[Folder]:
         return FOLDERS
