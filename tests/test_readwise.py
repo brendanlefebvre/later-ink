@@ -4,8 +4,15 @@ from datetime import datetime
 import httpx
 import pytest
 
-from later_ink.connectors.base import UpstreamError
-from later_ink.connectors.readwise import ReadwiseConnector, _article_from_doc
+from later_ink.connectors.base import Article, UpstreamError, minutes_to_words
+from later_ink.connectors.readwise import (
+    BOOK_CATEGORY,
+    LONG_READ_MIN_MINUTES,
+    SHORT_READ_MAX_MINUTES,
+    ReadwiseConnector,
+    _article_from_doc,
+    _reading_time_view,
+)
 
 MIXED = {
     "results": [
@@ -143,3 +150,122 @@ def test_a_non_json_response_is_reported_as_an_upstream_error():
             await conn.close()
 
     asyncio.run(run())
+
+
+def _article(words: int | None, category: str = "article") -> Article:
+    return Article(id="1", title="T", word_count=words, category=category)
+
+
+def test_short_reads_takes_articles_under_the_threshold():
+    assert _reading_time_view(_article(minutes_to_words(SHORT_READ_MAX_MINUTES) - 1), short=True)
+    assert not _reading_time_view(_article(minutes_to_words(SHORT_READ_MAX_MINUTES) + 1), short=True)
+
+
+def test_long_reads_takes_articles_over_the_threshold():
+    assert _reading_time_view(_article(minutes_to_words(LONG_READ_MIN_MINUTES) + 1), short=False)
+    assert not _reading_time_view(_article(minutes_to_words(LONG_READ_MIN_MINUTES) - 1), short=False)
+
+
+def test_an_unknown_length_is_not_a_short_read():
+    # A missing word count means unknown length, not zero — it must not fall
+    # into Short reads by default.
+    assert not _reading_time_view(_article(None), short=True)
+    assert not _reading_time_view(_article(0), short=True)
+
+
+def test_books_are_excluded_from_long_reads():
+    # Books have their own list, and would otherwise be most of Long reads.
+    long_enough = minutes_to_words(LONG_READ_MIN_MINUTES) + 1
+    assert not _reading_time_view(_article(long_enough, category=BOOK_CATEGORY), short=False)
+
+
+def test_books_are_listed_by_category_and_paginated():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(
+            200,
+            json={
+                "results": [{"id": "9", "title": "A book", "category": "epub"}],
+                "nextPageCursor": "page2",
+            },
+        )
+
+    async def run():
+        conn = ReadwiseConnector(
+            "tok",
+            client=httpx.AsyncClient(
+                base_url="https://readwise.test", transport=httpx.MockTransport(handler)
+            ),
+        )
+        try:
+            return await conn._list_books(cursor="page1")
+        finally:
+            await conn.close()
+
+    articles, cursor = asyncio.run(run())
+    assert [a.id for a in articles] == ["9"]
+    assert cursor == "page2"
+    assert seen[0]["category"] == "epub"
+    assert seen[0]["pageCursor"] == "page1"
+
+
+def test_categories_outside_the_configured_set_are_dropped():
+    articles, _ = _list(ReadwiseConnector("tok", categories=("article",)))
+    assert [a.category for a in articles] == ["article"]
+
+
+def test_a_429_is_retried_once_and_honours_retry_after(monkeypatch):
+    slept = []
+    monkeypatch.setattr(asyncio, "sleep", lambda d: _noop(slept, d))
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if len(attempts) == 1:
+            return httpx.Response(429, headers={"Retry-After": "3"})
+        return httpx.Response(200, json={"results": [], "nextPageCursor": None})
+
+    async def run():
+        conn = ReadwiseConnector(
+            "tok",
+            client=httpx.AsyncClient(
+                base_url="https://readwise.test", transport=httpx.MockTransport(handler)
+            ),
+        )
+        try:
+            return await conn.list_articles("later")
+        finally:
+            await conn.close()
+
+    asyncio.run(run())
+    assert len(attempts) == 2       # retried once
+    assert slept == [3.0]           # honoured Retry-After
+
+
+def test_a_persistent_429_becomes_a_readable_error(monkeypatch):
+    monkeypatch.setattr(asyncio, "sleep", lambda d: _noop([], d))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "3"})
+
+    async def run():
+        conn = ReadwiseConnector(
+            "tok",
+            client=httpx.AsyncClient(
+                base_url="https://readwise.test", transport=httpx.MockTransport(handler)
+            ),
+        )
+        try:
+            with pytest.raises(UpstreamError) as caught:
+                await conn.list_articles("later")
+            assert caught.value.status == 429
+        finally:
+            await conn.close()
+
+    asyncio.run(run())
+
+
+async def _noop(record, delay):
+    record.append(delay)
