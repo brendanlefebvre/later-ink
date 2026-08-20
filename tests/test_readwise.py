@@ -158,11 +158,15 @@ def _article(words: int | None, category: str = "article") -> Article:
 
 def test_short_reads_takes_articles_under_the_threshold():
     assert _reading_time_view(_article(minutes_to_words(SHORT_READ_MAX_MINUTES) - 1), short=True)
+    # Exactly at the threshold is not a short read: Reader's own filter is
+    # reading_time:<10, and a 10-minute read belongs to neither list.
+    assert not _reading_time_view(_article(minutes_to_words(SHORT_READ_MAX_MINUTES)), short=True)
     assert not _reading_time_view(_article(minutes_to_words(SHORT_READ_MAX_MINUTES) + 1), short=True)
 
 
 def test_long_reads_takes_articles_over_the_threshold():
     assert _reading_time_view(_article(minutes_to_words(LONG_READ_MIN_MINUTES) + 1), short=False)
+    assert not _reading_time_view(_article(minutes_to_words(LONG_READ_MIN_MINUTES)), short=False)
     assert not _reading_time_view(_article(minutes_to_words(LONG_READ_MIN_MINUTES) - 1), short=False)
 
 
