@@ -15,7 +15,7 @@ existing implementations have already drifted apart on one of them.
 rather than JSON — what a flaky network path actually produces — the two
 connectors behave differently:
 
-```
+```text
 readwise.list_articles: UNHANDLED JSONDecodeError -> 500 for the user
 wallabag.list_articles: UpstreamError (readable) — Wallabag returned an unexpected response
 ```
