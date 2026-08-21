@@ -45,10 +45,14 @@ class ConnectorSpec:
     single registry entry with nothing else to remember.
     """
 
-    label: str                                  # test id only
-    cls: type[Connector]                        # for the class-level assertions
-    build: Callable[[Callable], Connector]      # handler -> connector
-    handlers: Callable[[str], Callable]         # scenario -> handler
+    label: str                                          # test id only
+    cls: type[Connector]                                # for the class-level assertions
+    # handler -> (connector, its http client). The client comes back alongside
+    # the connector, rather than being reconstructed from it, so the close()
+    # contract test can check the one client it actually asked the connector
+    # to release.
+    build: Callable[[Callable], tuple[Connector, httpx.AsyncClient]]
+    handlers: Callable[[str], Callable]                 # scenario -> handler
     folder_id: str
     article_id: str
 
@@ -123,16 +127,29 @@ def _wallabag_handler(scenario: str) -> Callable:
     return handler
 
 
+def _build_readwise(handler: Callable) -> tuple[Connector, httpx.AsyncClient]:
+    client = httpx.AsyncClient(base_url="https://readwise.test", transport=httpx.MockTransport(handler))
+    return ReadwiseConnector("tok", client=client), client
+
+
+def _build_wallabag(handler: Callable) -> tuple[Connector, httpx.AsyncClient]:
+    client = httpx.AsyncClient(base_url="https://wb.test", transport=httpx.MockTransport(handler))
+    connector = WallabagConnector(
+        url="https://wb.test",
+        client_id="cid",
+        client_secret="csec",
+        username="user",
+        password="pass",
+        client=client,
+    )
+    return connector, client
+
+
 SPECS = [
     ConnectorSpec(
         label="readwise",
         cls=ReadwiseConnector,
-        build=lambda handler: ReadwiseConnector(
-            "tok",
-            client=httpx.AsyncClient(
-                base_url="https://readwise.test", transport=httpx.MockTransport(handler)
-            ),
-        ),
+        build=_build_readwise,
         handlers=_readwise_handler,
         folder_id=FOLDER_ID_READWISE,
         article_id=ARTICLE_ID,
@@ -140,16 +157,7 @@ SPECS = [
     ConnectorSpec(
         label="wallabag",
         cls=WallabagConnector,
-        build=lambda handler: WallabagConnector(
-            url="https://wb.test",
-            client_id="cid",
-            client_secret="csec",
-            username="user",
-            password="pass",
-            client=httpx.AsyncClient(
-                base_url="https://wb.test", transport=httpx.MockTransport(handler)
-            ),
-        ),
+        build=_build_wallabag,
         handlers=_wallabag_handler,
         folder_id=FOLDER_ID_WALLABAG,
         article_id=ARTICLE_ID,
@@ -159,7 +167,7 @@ SPECS = [
 
 def _run(spec: ConnectorSpec, scenario: str, call):
     async def go():
-        conn = spec.build(spec.handlers(scenario))
+        conn, _client = spec.build(spec.handlers(scenario))
         try:
             return await call(conn)
         finally:
@@ -262,10 +270,14 @@ def test_an_unreachable_host_raises_upstream_error(spec):
         _run(spec, "unreachable", lambda c: c.list_articles(spec.folder_id))
 
 
-def test_close_is_safe_to_call_twice(spec):
+def test_close_releases_the_http_client_and_is_safe_to_call_twice(spec):
+    # A close() that does nothing would satisfy "raises nothing on a second
+    # call" too, so the real assertion is that the first call actually
+    # released the client — not just that a second call is harmless.
     async def go():
-        conn = spec.build(spec.handlers("ok"))
+        conn, client = spec.build(spec.handlers("ok"))
         await conn.close()
+        assert client.is_closed
         await conn.close()
 
     asyncio.run(go())
