@@ -1,3 +1,4 @@
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -102,11 +103,20 @@ def retry_after_seconds(resp: httpx.Response, *, default: float = 2.0, cap: floa
 
     Bounded because an upstream is free to say "an hour" and an e-reader waiting
     on a download is not — past the cap, failing readably beats hanging.
+
+    A malformed value falls back to the default rather than being trusted:
+    float() happily parses "-1", "nan", and "inf" without raising, so a plain
+    try/except ValueError lets them through. A negative delay skips backoff
+    entirely, and NaN reaching asyncio.sleep raises ValueError there instead —
+    not a slow download, a 500.
     """
     try:
-        return min(float(resp.headers.get("Retry-After", default)), cap)
+        seconds = float(resp.headers.get("Retry-After", default))
     except ValueError:
         return default
+    if not math.isfinite(seconds) or seconds < 0:
+        return default
+    return min(seconds, cap)
 
 
 def raise_for_upstream(resp: httpx.Response, service: str) -> None:

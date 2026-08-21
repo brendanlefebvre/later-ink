@@ -25,6 +25,7 @@ from later_ink.connectors.base import (
     Connector,
     Folder,
     UpstreamError,
+    retry_after_seconds,
 )
 from later_ink.connectors.readwise import ReadwiseConnector
 from later_ink.connectors.wallabag import WallabagConnector
@@ -292,3 +293,38 @@ def test_every_shipped_connector_is_registered():
         if cls.__module__.startswith(connectors_pkg.__name__ + ".")
     }
     assert shipped == {s.cls for s in SPECS}
+
+
+# retry_after_seconds is shared by both connectors' retry loops, not tied to
+# either one's API shape, so it belongs here rather than in a per-connector
+# file.
+
+
+def test_retry_after_seconds_passes_through_a_valid_value():
+    resp = httpx.Response(429, headers={"Retry-After": "3"})
+    assert retry_after_seconds(resp) == 3.0
+
+
+def test_retry_after_seconds_caps_a_value_above_the_cap():
+    resp = httpx.Response(429, headers={"Retry-After": "9999"})
+    assert retry_after_seconds(resp) == 15.0
+
+
+def test_retry_after_seconds_falls_back_to_default_on_a_negative_value():
+    # -1 parses fine as a float, so this only fails for the right reason if
+    # the helper rejects it after parsing rather than trusting float()'s
+    # success.
+    resp = httpx.Response(429, headers={"Retry-After": "-1"})
+    assert retry_after_seconds(resp) == 2.0
+
+
+def test_retry_after_seconds_falls_back_to_default_on_nan():
+    # NaN also parses fine as a float — and an unguarded NaN reaching
+    # asyncio.sleep raises ValueError, escaping as a 500 to the reader.
+    resp = httpx.Response(429, headers={"Retry-After": "NaN"})
+    assert retry_after_seconds(resp) == 2.0
+
+
+def test_retry_after_seconds_falls_back_to_default_on_a_non_numeric_value():
+    resp = httpx.Response(429, headers={"Retry-After": "soon"})
+    assert retry_after_seconds(resp) == 2.0
