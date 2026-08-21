@@ -10,6 +10,7 @@ Adding a connector means adding a ConnectorSpec, not another test file.
 
 import asyncio
 import importlib
+import inspect
 import pkgutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -283,6 +284,16 @@ def test_close_releases_the_http_client_and_is_safe_to_call_twice(spec):
     asyncio.run(go())
 
 
+def _all_subclasses(cls: type) -> set[type]:
+    # Connector.__subclasses__() alone only returns *direct* subclasses, so a
+    # connector inheriting through a shared intermediate base (plausible once
+    # a third connector arrives) would never show up — the whole point of
+    # this test defeated by exactly the shape it should be checking for.
+    # Walking recursively is what makes that unregistered connector visible.
+    direct = cls.__subclasses__()
+    return set(direct).union(*(_all_subclasses(sub) for sub in direct)) if direct else set()
+
+
 def test_every_shipped_connector_is_registered():
     # A connector added without a ConnectorSpec entry is silently unverified.
     # Connector.__subclasses__() alone would only see classes some earlier
@@ -298,11 +309,14 @@ def test_every_shipped_connector_is_registered():
     # Filtering by defining module (rather than trusting __subclasses__ alone)
     # excludes test doubles like tests/test_views.py's PagedConnector and
     # tests/test_search.py's FakeConnector, which subclass Connector but are
-    # not shipped connectors.
+    # not shipped connectors. The isabstract() filter excludes an abstract
+    # intermediate base within the package itself — recursion means it's now
+    # in scope, but it's a shared base, not a shipped connector, and demanding
+    # it have its own ConnectorSpec would be asking it to be instantiable.
     shipped = {
         cls
-        for cls in Connector.__subclasses__()
-        if cls.__module__.startswith(connectors_pkg.__name__ + ".")
+        for cls in _all_subclasses(Connector)
+        if cls.__module__.startswith(connectors_pkg.__name__ + ".") and not inspect.isabstract(cls)
     }
     assert shipped == {s.cls for s in SPECS}
 
