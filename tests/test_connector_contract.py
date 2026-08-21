@@ -9,12 +9,16 @@ Adding a connector means adding a ConnectorSpec, not another test file.
 """
 
 import asyncio
+import importlib
+import pkgutil
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 import httpx
 import pytest
 
+import later_ink.connectors as connectors_pkg
 from later_ink.connectors.base import (
     Article,
     ArticleUnavailable,
@@ -58,6 +62,10 @@ def _readwise_handler(scenario: str) -> Callable:
             return httpx.Response(200, text="<html><body>502 Bad Gateway</body></html>")
         if scenario == "missing":
             return httpx.Response(200, json={"results": [], "nextPageCursor": None})
+        if scenario == "unreachable":
+            # Readwise has no pre-flight auth call, so this is already the data
+            # request — nothing else needs to succeed first.
+            raise httpx.ConnectError("no route to host")
         return httpx.Response(
             200,
             json={
@@ -88,6 +96,10 @@ def _wallabag_handler(scenario: str) -> Callable:
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth/v2/token":
+            # Must keep succeeding even under "unreachable": Wallabag's _get
+            # calls _ensure_token() before the data request, so failing this
+            # too would exercise the auth path's error mapping instead of the
+            # data request's — not what the scenario is testing.
             return httpx.Response(
                 200, json={"access_token": "t", "refresh_token": "r", "expires_in": 3600}
             )
@@ -101,6 +113,8 @@ def _wallabag_handler(scenario: str) -> Callable:
             return httpx.Response(200, text="<html><body>502 Bad Gateway</body></html>")
         if scenario == "missing":
             return httpx.Response(404)
+        if scenario == "unreachable":
+            raise httpx.ConnectError("no route to host")
         if request.url.path.startswith("/api/entries/"):
             return httpx.Response(200, json=entry)
         return httpx.Response(200, json={"_embedded": {"items": [entry]}, "page": 1, "pages": 1})
@@ -190,16 +204,32 @@ def test_list_articles_returns_articles_and_a_cursor(spec):
         assert isinstance(a.id, str) and a.id
 
 
+# The determinism guard. dcterms:modified comes from content_date, and
+# ebooklib formats it with a literal Z and no conversion, so an aware value
+# would be written as UTC while carrying local wall-clock time — and the bytes
+# would drift if that offset ever moved. Both handlers above feed a +02:00
+# timestamp precisely so a connector that forgets base.parse_dt fails here.
+# CONTENT_DATE_UTC is that timestamp converted to UTC, not just stripped of
+# tzinfo: datetime.fromisoformat(...).replace(tzinfo=None) also satisfies
+# "tzinfo is None" while keeping the wrong (local) wall-clock value, so the
+# assertion below checks the value, not the empty tzinfo slot.
+CONTENT_DATE_UTC = datetime(2025, 1, 2, 1, 4, 5)
+
+
 def test_content_date_is_naive_utc(spec):
-    # The determinism guard. dcterms:modified comes from content_date, and
-    # ebooklib formats it with a literal Z and no conversion, so an aware value
-    # would be written as UTC while carrying local wall-clock time — and the
-    # bytes would drift if that offset ever moved. Both handlers above feed a
-    # +02:00 timestamp precisely so a connector that forgets base.parse_dt
-    # fails here.
     articles, _ = _run(spec, "ok", lambda c: c.list_articles(spec.folder_id))
-    for a in articles:
-        assert a.content_date is None or a.content_date.tzinfo is None
+    assert articles
+    assert [a.content_date for a in articles] == [CONTENT_DATE_UTC]
+
+
+def test_the_downloaded_article_content_date_is_naive_utc(spec):
+    # The Article that reaches build_epub — and therefore dcterms:modified —
+    # comes from get_article_html, not list_articles (main.py's _epub_response
+    # calls get_article_html). Checking only list_articles lets that path drift
+    # unnoticed; both connectors currently share one _article_from_* helper
+    # across both methods, but a future connector need not.
+    article, _ = _run(spec, "ok", lambda c: c.get_article_html(spec.article_id))
+    assert article.content_date == CONTENT_DATE_UTC
 
 
 def test_get_article_html_returns_an_article_and_html(spec):
@@ -223,18 +253,12 @@ def test_upstream_problems_raise_upstream_error(spec, scenario):
 
 
 def test_an_unreachable_host_raises_upstream_error(spec):
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("no route to host")
-
-    async def go():
-        conn = spec.build(handler)
-        try:
-            with pytest.raises(UpstreamError):
-                await conn.list_articles(spec.folder_id)
-        finally:
-            await conn.close()
-
-    asyncio.run(go())
+    # Uses the connector's own handler (via the "unreachable" scenario) rather
+    # than a bare ConnectError-for-everything handler: Wallabag's _get calls
+    # _ensure_token() before the data GET, so failing every request only ever
+    # exercised _fetch_token's error mapping and never reached list_articles'.
+    with pytest.raises(UpstreamError):
+        _run(spec, "unreachable", lambda c: c.list_articles(spec.folder_id))
 
 
 def test_close_is_safe_to_call_twice(spec):
@@ -244,3 +268,27 @@ def test_close_is_safe_to_call_twice(spec):
         await conn.close()
 
     asyncio.run(go())
+
+
+def test_every_shipped_connector_is_registered():
+    # A connector added without a ConnectorSpec entry is silently unverified.
+    # Connector.__subclasses__() alone would only see classes some earlier
+    # import happened to load — passing vacuously when this file runs by
+    # itself, and only catching a missing registration by accident of import
+    # order elsewhere in the suite. Walking the package's own modules first
+    # makes discovery independent of what else has been imported.
+    for _, module_name, _ in pkgutil.iter_modules(
+        connectors_pkg.__path__, connectors_pkg.__name__ + "."
+    ):
+        importlib.import_module(module_name)
+
+    # Filtering by defining module (rather than trusting __subclasses__ alone)
+    # excludes test doubles like tests/test_views.py's PagedConnector and
+    # tests/test_search.py's FakeConnector, which subclass Connector but are
+    # not shipped connectors.
+    shipped = {
+        cls
+        for cls in Connector.__subclasses__()
+        if cls.__module__.startswith(connectors_pkg.__name__ + ".")
+    }
+    assert shipped == {s.cls for s in SPECS}
