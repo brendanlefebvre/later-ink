@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 
@@ -122,12 +123,19 @@ def raise_for_upstream(resp: httpx.Response, service: str) -> None:
         raise UpstreamError(f"{service} returned an error ({resp.status_code})", resp.status_code)
 
 
-def decode_json(resp: httpx.Response, service: str) -> dict:
+def decode_json(resp: httpx.Response, service: str) -> Any:
     """Parse a response body, or raise UpstreamError.
 
     A 200 is not a promise of JSON: a proxy or captive portal answers with an
     HTML error page and the status of its own choosing. Unguarded, that raises
     JSONDecodeError — not an UpstreamError — and reaches the reader as a 500.
+
+    Typed `Any`, not `dict`: resp.json() returns whatever the body decodes to,
+    and a top-level JSON array decodes to a list. Both current upstreams
+    return objects, so `dict` was true by accident — a future connector whose
+    endpoint returns a top-level array would be lying about its own return
+    type. The two connectors' own `_get(...) -> dict` stay as `dict`, which is
+    accurate for those two upstreams specifically.
     """
     try:
         return resp.json()
