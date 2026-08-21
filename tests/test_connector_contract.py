@@ -336,6 +336,17 @@ def test_retry_after_seconds_caps_a_value_above_the_cap():
     assert retry_after_seconds(resp) == 15.0
 
 
+def test_retry_after_seconds_caps_infinity_the_same_as_a_huge_finite_value():
+    # The monotonicity property: "inf" is a coherent instruction the cap
+    # already answers, so it must cap to the same value a merely huge request
+    # like "9999" does. Rejecting it instead — falling back to the default —
+    # would make an infinite wait shorter than a finite one, which is
+    # backwards and is exactly the regression this test exists to catch.
+    huge = httpx.Response(429, headers={"Retry-After": "9999"})
+    infinite = httpx.Response(429, headers={"Retry-After": "inf"})
+    assert retry_after_seconds(infinite) == retry_after_seconds(huge) == 15.0
+
+
 def test_retry_after_seconds_falls_back_to_default_on_a_negative_value():
     # -1 parses fine as a float, so this only fails for the right reason if
     # the helper rejects it after parsing rather than trusting float()'s

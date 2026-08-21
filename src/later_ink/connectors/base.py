@@ -108,13 +108,17 @@ def retry_after_seconds(resp: httpx.Response, *, default: float = 2.0, cap: floa
     float() happily parses "-1", "nan", and "inf" without raising, so a plain
     try/except ValueError lets them through. A negative delay skips backoff
     entirely, and NaN reaching asyncio.sleep raises ValueError there instead —
-    not a slow download, a 500.
+    not a slow download, a 500. "inf" is different from those two: it's a
+    coherent instruction ("wait indefinitely") that the cap already answers,
+    so it's left to fall through to the min() below rather than rejected —
+    rejecting it would make an infinite request wait *less* than a merely
+    huge one like "999", which is backwards.
     """
     try:
         seconds = float(resp.headers.get("Retry-After", default))
     except ValueError:
         return default
-    if not math.isfinite(seconds) or seconds < 0:
+    if math.isnan(seconds) or seconds < 0:
         return default
     return min(seconds, cap)
 
