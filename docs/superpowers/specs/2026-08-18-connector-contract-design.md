@@ -117,8 +117,12 @@ about. One file readable top-to-bottom as a document is worth more here.
 - `list_folders()` returns `Folder`s, each with a non-empty `str` `id` and
   `title`.
 - `list_articles(folder_id)` returns `(list[Article], str | None)`. Every
-  `Article.id` is a `str`. **Every `Article.content_date` is `None` or has
-  `tzinfo is None`** — the determinism guard.
+  `Article.id` is a `str`. **`Article.content_date` must equal the source
+  timestamp converted to UTC** — the determinism guard. Checked on both
+  `list_articles` and `get_article_html`, because the latter is where
+  `dcterms:modified` actually comes from (`main.py`'s `_epub_response` calls
+  `get_article_html`, not `list_articles`); a connector whose two payloads
+  disagree would otherwise pass on the untested path.
 - `get_article_html(article_id)` returns `(Article, str)` with non-empty HTML.
 - `missing` raises `ArticleUnavailable`, **not** `UpstreamError`. The two are
   handled differently: `ArticleUnavailable` carries a user-facing explanation
@@ -191,9 +195,10 @@ described in §2. The contract suite runs against both connectors from day one.
   case is the test of this: it is in the contract precisely because one
   implementation gets it wrong.
 - **Registry drift.** A connector added without a registry entry is silently
-  unverified. Mitigated by making registration the same one-line act as adding
-  the connector to `main.py`, and by the uniqueness assertion on `name`, which
-  fails loudly if two entries collide.
+  unverified. Mitigated by `test_every_shipped_connector_is_registered`, which
+  walks every module in `later_ink.connectors` and fails if a `Connector`
+  subclass defined there has no matching `ConnectorSpec` — and by the
+  uniqueness assertion on `name`, which fails loudly if two entries collide.
 - **Over-fitting to two connectors.** Real, and the reason the request loop is
   explicitly out of scope (below).
 
