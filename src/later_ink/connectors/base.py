@@ -1,7 +1,11 @@
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
+
+import httpx
 
 
 class UpstreamError(Exception):
@@ -92,6 +96,65 @@ def parse_dt(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed
     return parsed.astimezone(UTC).replace(tzinfo=None)
+
+
+def retry_after_seconds(resp: httpx.Response, *, default: float = 2.0, cap: float = 15.0) -> float:
+    """How long to wait after a 429, from Retry-After, bounded.
+
+    Bounded because an upstream is free to say "an hour" and an e-reader waiting
+    on a download is not — past the cap, failing readably beats hanging.
+
+    A malformed value falls back to the default rather than being trusted:
+    float() happily parses "-1", "nan", and "inf" without raising, so a plain
+    try/except ValueError lets them through. A negative delay skips backoff
+    entirely, and NaN reaching asyncio.sleep raises ValueError there instead —
+    not a slow download, a 500. "inf" is different from those two: it's a
+    coherent instruction ("wait indefinitely") that the cap already answers,
+    so it's left to fall through to the min() below rather than rejected —
+    rejecting it would make an infinite request wait *less* than a merely
+    huge one like "999", which is backwards.
+    """
+    try:
+        seconds = float(resp.headers.get("Retry-After", default))
+    except ValueError:
+        return default
+    if math.isnan(seconds) or seconds < 0:
+        return default
+    return min(seconds, cap)
+
+
+def raise_for_upstream(resp: httpx.Response, service: str) -> None:
+    """Turn an error status into an UpstreamError, or return for a good one.
+
+    service names the upstream in the message, because the person reading it on
+    an e-reader needs to know which account to go and fix.
+    """
+    if resp.status_code == 429:
+        raise UpstreamError(f"{service} is rate-limiting this account; try again in a minute", 429)
+    if resp.status_code == 401:
+        raise UpstreamError(f"{service} rejected the stored credentials", 401)
+    if resp.status_code >= 400:
+        raise UpstreamError(f"{service} returned an error ({resp.status_code})", resp.status_code)
+
+
+def decode_json(resp: httpx.Response, service: str) -> Any:
+    """Parse a response body, or raise UpstreamError.
+
+    A 200 is not a promise of JSON: a proxy or captive portal answers with an
+    HTML error page and the status of its own choosing. Unguarded, that raises
+    JSONDecodeError — not an UpstreamError — and reaches the reader as a 500.
+
+    Typed `Any`, not `dict`: resp.json() returns whatever the body decodes to,
+    and a top-level JSON array decodes to a list. Both current upstreams
+    return objects, so `dict` was true by accident — a future connector whose
+    endpoint returns a top-level array would be lying about its own return
+    type. The two connectors' own `_get(...) -> dict` stay as `dict`, which is
+    accurate for those two upstreams specifically.
+    """
+    try:
+        return resp.json()
+    except ValueError as e:
+        raise UpstreamError(f"{service} returned an unexpected response") from e
 
 
 def _encode_scan_cursor(folder_index: int, page: str | None) -> str:

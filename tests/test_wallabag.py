@@ -32,19 +32,17 @@ ENTRIES_PAGE = {
 
 
 def _make_conn(handler) -> WallabagConnector:
-    conn = WallabagConnector(
+    return WallabagConnector(
         url="https://wb.example.com",
         client_id="cid",
         client_secret="csec",
         username="user",
         password="pass",
+        client=httpx.AsyncClient(
+            base_url="https://wb.example.com",
+            transport=httpx.MockTransport(handler),
+        ),
     )
-    # Swap the real HTTP client for a mocked transport, keeping the base URL.
-    conn._client = httpx.AsyncClient(
-        base_url="https://wb.example.com",
-        transport=httpx.MockTransport(handler),
-    )
-    return conn
 
 
 def _handler(requests: list):
@@ -263,3 +261,33 @@ def test_entry_content_date_from_created_at():
 
 def test_entry_content_date_is_none_without_created_at():
     assert _article_from_entry({"id": 1, "title": "T"}).content_date is None
+
+
+def test_an_injected_client_is_used_instead_of_a_real_one():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/oauth/v2/token":
+            return httpx.Response(200, json={"access_token": "t", "refresh_token": "r", "expires_in": 3600})
+        return httpx.Response(200, json={"_embedded": {"items": []}, "page": 1, "pages": 1})
+
+    async def run():
+        client = httpx.AsyncClient(
+            base_url="https://wb.example.com", transport=httpx.MockTransport(handler)
+        )
+        conn = WallabagConnector(
+            url="https://wb.example.com",
+            client_id="cid",
+            client_secret="csec",
+            username="user",
+            password="pass",
+            client=client,
+        )
+        try:
+            await conn.list_articles("unread")
+        finally:
+            await conn.close()
+
+    asyncio.run(run())
+    assert "/api/entries.json" in seen

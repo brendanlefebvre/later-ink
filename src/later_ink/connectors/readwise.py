@@ -9,8 +9,11 @@ from .base import (
     Connector,
     Folder,
     UpstreamError,
+    decode_json,
     minutes_to_words,
     parse_dt,
+    raise_for_upstream,
+    retry_after_seconds,
 )
 
 BASE_URL = "https://readwise.io/api/v3"
@@ -113,10 +116,18 @@ class ReadwiseConnector(Connector):
     name = "readwise"
     description = "Readwise Reader"
 
-    def __init__(self, token: str, categories: tuple[str, ...] = DEFAULT_CATEGORIES):
+    def __init__(
+        self,
+        token: str,
+        categories: tuple[str, ...] = DEFAULT_CATEGORIES,
+        client: httpx.AsyncClient | None = None,
+    ):
         self._token = token
         self._categories = set(categories)
-        self._client = httpx.AsyncClient(
+        # An injected client is taken as-is, including its auth: the caller that
+        # supplies one is a test with a mock transport, and giving it the real
+        # base URL would send those requests somewhere unintended.
+        self._client = client or httpx.AsyncClient(
             base_url=BASE_URL,
             headers={"Authorization": f"Token {token}"},
             timeout=30.0,
@@ -130,22 +141,11 @@ class ReadwiseConnector(Connector):
             except httpx.HTTPError as e:
                 raise UpstreamError(f"Could not reach Readwise: {type(e).__name__}") from e
             if resp.status_code == 429 and attempt == 0:
-                try:
-                    delay = min(float(resp.headers.get("Retry-After", "2")), 15.0)
-                except ValueError:
-                    delay = 2.0
-                await asyncio.sleep(delay)
+                await asyncio.sleep(retry_after_seconds(resp))
                 continue
             break
-        if resp.status_code == 429:
-            raise UpstreamError(
-                "Readwise is rate-limiting this account; try again in a minute", 429
-            )
-        if resp.status_code == 401:
-            raise UpstreamError("Readwise rejected the stored token", 401)
-        if resp.status_code >= 400:
-            raise UpstreamError(f"Readwise returned an error ({resp.status_code})", resp.status_code)
-        return resp.json()
+        raise_for_upstream(resp, "Readwise")
+        return decode_json(resp, "Readwise")
 
     async def list_folders(self) -> list[Folder]:
         return LOCATIONS
