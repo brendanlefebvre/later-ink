@@ -23,7 +23,7 @@
 # the OS packages also freezes their CVEs, so the pin is only safe with
 # something refreshing it — see .github/dependabot.yml, which also records why
 # nothing tries to verify the tag and digest still agree.
-FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36 AS builder
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS builder
 
 WORKDIR /app
 
@@ -39,7 +39,7 @@ COPY src/ src/
 RUN pip wheel --no-cache-dir --no-deps --no-build-isolation -w /wheels .
 
 
-FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
 
 WORKDIR /app
 
