@@ -82,7 +82,10 @@ auth=<the OAuth1 signer>)`.
 
 `config.get_instapaper_config()` returns `None` unless **all four** env vars are
 set, and otherwise a dict whose keys match `__init__` exactly so
-`InstapaperConnector(**cfg)` works, mirroring `get_wallabag_config()`:
+`InstapaperConnector(**cfg)` works, mirroring `get_wallabag_config()` — including
+its trimming: read each var with `.strip()` and treat a blank as missing
+(`if not all(values.values()): return None`), so whitespace-only config does not
+register a broken connector.
 
 | Env var | dict key |
 |---|---|
@@ -109,7 +112,16 @@ Signing uses **oauthlib** (the pure-Python signing core), wrapped in a small
 stay free of header-building:
 
 ```python
+import oauthlib.oauth1  # `import oauthlib` alone does NOT expose the `oauth1` submodule
+
 class _OAuth1Auth(httpx.Auth):
+    # httpx reads the body inside auth_flow to include it in the signature base
+    # string. For the connector's form-encoded `data=` requests the body is
+    # already available; this flag is defensive — it makes httpx call
+    # request.read() first, so a future switch to a streaming body can't break
+    # signing with httpx.RequestNotRead.
+    requires_request_body = True
+
     def __init__(self, consumer_key, consumer_secret, oauth_token, oauth_token_secret):
         self._client = oauthlib.oauth1.Client(
             consumer_key,
@@ -147,31 +159,38 @@ needs *in the article id*. A bookmark's `time` (its save moment → `content_dat
 never changes, so an id that freezes it is deterministic by construction.
 
 ```python
-def _encode_article_id(bookmark_id: str, time: int, title: str) -> str:
+def _encode_article_id(bookmark_id: str, time: int, title: str, url: str | None) -> str:
     # base64url of a compact JSON object, no padding — URL- and cache-key-safe.
-    raw = json.dumps({"i": bookmark_id, "t": time, "n": title}, separators=(",", ":"))
+    raw = json.dumps(
+        {"i": bookmark_id, "t": time, "n": title, "u": url or ""}, separators=(",", ":")
+    )
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
-def _decode_article_id(token: str) -> tuple[str, int, str]:
+def _decode_article_id(token: str) -> tuple[str, int, str, str]:
     # A malformed or forged token is not a server failure — it is an article the
     # user cannot have, so it surfaces as ArticleUnavailable(404), not a 500.
     try:
         pad = "=" * (-len(token) % 4)
         data = json.loads(base64.urlsafe_b64decode(token + pad))
-        return str(data["i"]), int(data["t"]), str(data["n"])
+        return str(data["i"]), int(data["t"]), str(data["n"]), str(data["u"])
     except (ValueError, KeyError, TypeError) as e:
         raise ArticleUnavailable("This article link is invalid.", status=404) from e
 ```
 
 `list_articles` sets each `Article.id` to `_encode_article_id(...)`.
 `get_article_html` decodes it: `bookmark_id` → `get_text`; `time` →
-`content_date` (via `base.parse_epoch`); `title` → the `Article.title`.
+`content_date` (via `base.parse_epoch`); `title` → the `Article.title`; `url` →
+`Article.url`. The `url` is carried so the download path can emit `DC.source` in
+the EPUB, matching Readwise and Wallabag — `get_text` returns no metadata, so
+without it in the token an Instapaper EPUB would silently drop its source URL. An
+empty string decodes back to `None` for `Article.url`.
 
 **No signing on the token is needed.** `get_text` is scoped to the authenticated
 account's own tokens, so a forged id can only ever produce an EPUB from the
-requester's *own* library, with an attacker-chosen title/date on their *own*
-download — no cross-account read, no injection. This reasoning belongs in a
-code comment, because a reviewer will ask why the id is not signed.
+requester's *own* library, with an attacker-chosen title/date/url on their *own*
+download — no cross-account read, no injection. (The `url` rides only into
+`DC.source` metadata, never into a request.) This reasoning belongs in a code
+comment, because a reviewer will ask why the id is not signed.
 
 **Contract interaction.** The Instapaper `ConnectorSpec.article_id` is a valid
 encoded token whose `time` equals the contract's expected UTC instant, and whose
@@ -219,7 +238,7 @@ and `limit=500`. The response is a JSON array of mixed objects; keep those with
 
 | Article field | Source |
 |---|---|
-| `id` | `_encode_article_id(bookmark_id, time, title)` |
+| `id` | `_encode_article_id(bookmark_id, time, title, url)` |
 | `title` | `title` (or `"Untitled"`) |
 | `url` | `url` |
 | `summary` | `description` or `None` |
@@ -233,8 +252,8 @@ interface.
 
 **`get_article_html(article_id)`** — decode the token; POST `bookmarks/get_text`
 with the `bookmark_id`. On HTTP 200 the body is `text/html` (not JSON): return
-`resp.text` directly. Build the `Article` from the decoded `time`/`title` (see
-§3). An empty body or any error (see §6) raises `ArticleUnavailable`.
+`resp.text` directly. Build the `Article` from the decoded `time`/`title`/`url`
+(see §3). An empty body or any error (see §6) raises `ArticleUnavailable`.
 
 **`list_views()`** — inherits the base `[]`. No word count, so no reading-time
 views.
@@ -248,13 +267,27 @@ filters, bounded by `SEARCH_SCAN_LIMIT`.
 ## 6. Error handling
 
 Instapaper reports application errors as an object in the response array,
-`{"type": "error", "error_code": <int>, "message": <str>}`, which can arrive
-under HTTP 200. Its `message` is documented as developer-facing and **must not**
-be shown to users; the connector supplies its own readable text. A helper runs
-after `decode_json` on the JSON endpoints:
+`{"type": "error", "error_code": <int>, "message": <str>}`, and — this is the
+subtlety that shapes both paths — **it can arrive under HTTP 200**. Its
+`message` is documented as developer-facing and **must not** be shown to users;
+the connector supplies its own readable text.
+
+The connector has two request helpers, named for their POST behaviour (not
+`_get`, since every Instapaper call is a POST):
+
+- **`_post_json(path, data) -> list`** — for `bookmarks/list` and
+  `folders/list`. After the shared `raise_for_upstream` and `decode_json`, it
+  **validates the top-level value is a list** and otherwise raises
+  `UpstreamError("Instapaper returned an unexpected response")`. This guard is
+  not optional: `decode_json` is typed `Any`, and a stray JSON *object* (a proxy
+  fault, or Instapaper wrapping an error) would make the error scan below iterate
+  the object's keys, miss the fault, and then let `list_articles`' `.get(...)`
+  filter raise `AttributeError` → a 500 — the exact failure class the contract's
+  `decode_json` was added to close. With a confirmed list, it scans for an error
+  entry:
 
 ```python
-def _raise_for_instapaper_error(items: list) -> None:
+def _raise_for_json_error(items: list) -> None:
     err = next((o for o in items if isinstance(o, dict) and o.get("type") == "error"), None)
     if err is None:
         return
@@ -266,30 +299,36 @@ def _raise_for_instapaper_error(items: list) -> None:
     raise UpstreamError("Instapaper returned an error", 502)
 ```
 
-Relevant codes (from Instapaper's error table):
+- **`_post_text(path, data) -> str`** — for `bookmarks/get_text`. Because a
+  success body is HTML and a failure body is a JSON error envelope, it **cannot
+  branch on status alone** (the envelope can come with HTTP 200). It decides by
+  content: if the body parses as a JSON error envelope, map its `error_code` per
+  the table below; otherwise, on a 2xx return the HTML, and on any other status
+  with no parseable envelope raise `ArticleUnavailable(422)`. An empty body is
+  `ArticleUnavailable(422)`.
 
-| Code | Meaning | Mapping |
-|---|---|---|
-| 1040 | Rate-limit exceeded | `UpstreamError(429)` |
-| 1041 | Premium account required | `get_text`: `ArticleUnavailable(422)`; else `UpstreamError` |
-| 1042 | Application suspended | `UpstreamError(403)` |
-| 1220 / 1221 | Domain restrictions | `get_text`: `ArticleUnavailable(422)` |
-| 1241 | Invalid or missing `bookmark_id` | `get_text`: `ArticleUnavailable(404)` |
-| 1242 | Invalid or missing `folder_id` | `list_articles`: `UpstreamError(502)` |
-| 1500 | Unexpected service error | `UpstreamError(502)` |
-| 1550 | Error generating text version | `get_text`: `ArticleUnavailable(422)` |
+Error-code mapping (from Instapaper's published error table):
+
+| Code | Meaning | `bookmarks/get_text` | `bookmarks/list`, `folders/list` |
+|---|---|---|---|
+| 1040 | Rate-limit exceeded | `UpstreamError(429)` | `UpstreamError(429)` |
+| 1041 | Premium account required | `ArticleUnavailable(422)` | `UpstreamError(502)` |
+| 1042 | Application suspended | `UpstreamError(403)` | `UpstreamError(403)` |
+| 1220 / 1221 | Domain restrictions | `ArticleUnavailable(422)` | — |
+| 1241 | Invalid or missing `bookmark_id` | `ArticleUnavailable(404)` | — |
+| 1242 | Invalid or missing `folder_id` | — | `UpstreamError(502)` |
+| 1500 | Unexpected service error | `ArticleUnavailable(422)` | `UpstreamError(502)` |
+| 1550 | Error generating text version | `ArticleUnavailable(422)` | — |
+| (unknown) | anything unmapped | `ArticleUnavailable(422)` | `UpstreamError(502)` |
 
 **Transport and HTTP-status errors** still go through the shared
 `raise_for_upstream(resp, "Instapaper")` (HTTP 401 → rejected credentials,
 HTTP 429 → rate-limited, other 4xx/5xx → generic) and the shared
 `retry_after_seconds` on a single 429 retry, exactly as the other two
-connectors' `_get` loops do. An OAuth signature rejection surfaces as HTTP 401.
-
-**`get_text` error path.** Because `get_text` returns HTML, not JSON, its `_get`
-variant checks status first: on HTTP `>= 400`, attempt to parse an error
-envelope for the `error_code` and map per the table (defaulting to
-`ArticleUnavailable(422)` when the code is unknown or the body is not parseable);
-an empty 200 body is `ArticleUnavailable(422)`.
+connectors' request loops do. An OAuth signature rejection surfaces as HTTP 401.
+For `_post_text`, the JSON-envelope check runs before `raise_for_upstream`, so a
+recognised application error yields its mapped `ArticleUnavailable` rather than a
+generic HTTP-status `UpstreamError`.
 
 ## 7. The one-time mint helper
 
@@ -348,13 +387,41 @@ resolves folder-wins-over-view.
 ## 9. Testing
 
 **Contract (`tests/test_connector_contract.py`).** Register one
-`ConnectorSpec` for Instapaper: a `build` that constructs the connector with an
-injected `httpx.AsyncClient(transport=MockTransport(handler))`, an
-`_instapaper_handler` factory covering the scenarios `ok`, `missing`,
-`error_500`, `unauthorized`, `non_json`, `unreachable`, a `folder_id="unread"`,
-and an `article_id` that is a valid encoded token (§3). `get_text` returns HTML
-for `ok` and an Instapaper error envelope for `missing`. Adding this spec is what
-makes `test_every_shipped_connector_is_registered` pass for the new module.
+`ConnectorSpec` for Instapaper. Its `build` must match the existing builders'
+shape exactly — it returns a **`(connector, client)` tuple**, and the injected
+client is given a `base_url` (the current `ConnectorSpec.build` is typed
+`Callable[..., tuple[Connector, httpx.AsyncClient]]`, and
+`test_close_releases_the_http_client_and_is_safe_to_call_twice` does
+`conn, client = spec.build(...)` then asserts `client.is_closed`; a bare-connector
+`build` breaks unpacking for the whole parametrized suite, and a client with no
+`base_url` makes `client.post("bookmarks/list")` raise `ValueError: unknown url
+type` before the mock is reached):
+
+```python
+def _build_instapaper(handler: Callable) -> tuple[Connector, httpx.AsyncClient]:
+    client = httpx.AsyncClient(
+        base_url="https://instapaper.test/api/1",
+        transport=httpx.MockTransport(handler),
+    )
+    connector = InstapaperConnector(
+        consumer_key="ck", consumer_secret="cs",
+        oauth_token="ot", oauth_token_secret="ots",
+        client=client,
+    )
+    return connector, client
+```
+
+An `_instapaper_handler` factory covers the scenarios `ok`, `missing`,
+`error_500`, `unauthorized`, `non_json`, `unreachable`, with `folder_id="unread"`
+and an `article_id` that is a valid encoded token whose `time` is the contract
+epoch `1735779845` (the Unix epoch of the contract's
+`CONTENT_DATE_UTC = datetime(2025, 1, 2, 1, 4, 5)`; use the same value for the
+`bookmarks/list` `ok` handler's `time` field so both the list and download paths
+land on `CONTENT_DATE_UTC`). `get_text` returns HTML for `ok`; for `missing` it returns
+**an Instapaper error envelope with error_code 1241 under HTTP 400** (the pinned
+status the `missing` scenario asserts against → `ArticleUnavailable(404)`).
+Adding this spec is what makes `test_every_shipped_connector_is_registered` pass
+for the new module.
 
 The `non_json` scenario targets the JSON endpoint path (`list_articles` →
 `bookmarks/list` → `decode_json` raises `UpstreamError`). It does **not** apply
@@ -364,18 +431,23 @@ article body. The two must not be conflated.
 
 **Connector-specific (`tests/test_instapaper.py`).**
 
-- `_encode_article_id`/`_decode_article_id` round-trip, and malformed/forged
-  tokens raise `ArticleUnavailable(404)`.
+- `_encode_article_id`/`_decode_article_id` round-trip (including `url`, and an
+  empty `url` decoding back to `None`), and malformed/forged tokens raise
+  `ArticleUnavailable(404)`.
 - `parse_epoch`: an epoch maps to the exact naive-UTC datetime; `None`/invalid → `None`.
 - `list_folders` includes the three built-ins and maps custom folders from
   `folders/list`.
 - `list_articles` filters to `type == "bookmark"`, maps fields, encodes ids,
   returns `next_cursor is None`.
+- **Shape guard:** a `bookmarks/list` response that is a JSON *object* (not a
+  list) raises `UpstreamError`, not `AttributeError`/500 (finding 11).
 - `get_article_html` returns the HTML and an `Article` whose `content_date` is
-  the decoded epoch as naive UTC.
-- The error table: 1241 → `ArticleUnavailable(404)`, 1550/1041 →
-  `ArticleUnavailable(422)`, 1040 → `UpstreamError(429)`, an HTTP-200 error
-  envelope on `list` → `UpstreamError`.
+  the decoded epoch as naive UTC and whose `url` is the decoded url (so
+  `DC.source` is populated on the EPUB path).
+- The error table on **both** paths: for `get_text`, 1241 →
+  `ArticleUnavailable(404)` and 1550/1041/1220 → `ArticleUnavailable(422)`,
+  including when the envelope arrives under **HTTP 200**; for `list`, 1040 →
+  `UpstreamError(429)` and an HTTP-200 error envelope → `UpstreamError`.
 - `_OAuth1Auth` produces the expected `Authorization` header with a pinned
   nonce/timestamp.
 
@@ -422,3 +494,26 @@ collision assertion land once the connector exists. The mint helper is
 independent and can land any time after the OAuth signer. Readwise and Wallabag
 are untouched except for the shared `base.py` additions and the guard removal in
 `main.py`.
+
+## 13. Integration checklist
+
+Cross-cutting touch-points that are not part of the connector's own code but
+will break the build, the suite, or hermeticity if missed. Surfaced by the
+supplemental review; each is confirmed against the current tree.
+
+- **Lockfiles, not just `pyproject.toml`.** CI installs `requirements-dev.txt`
+  and the Docker image installs `requirements.txt`, both `--require-hashes`, and
+  the project itself installs `--no-deps`. Adding `oauthlib>=3.2.2` to
+  `pyproject.toml` alone leaves CI and the image unable to import it. Regenerate
+  both locks with the `uv pip compile … --generate-hashes` command recorded at
+  the top of each file (`requirements.txt` and `requirements-dev.txt`);
+  `requirements-build.txt` is unaffected.
+- **Test hermeticity.** Extend `_CONNECTOR_ENV` in `tests/conftest.py` (the
+  autouse fixture that unsets connector env vars) with the four `INSTAPAPER_*`
+  vars, or the suite is non-hermetic on any machine that has them set.
+- **`.env.example`.** Add a commented Instapaper section (the four
+  `INSTAPAPER_*` vars) beside the existing Readwise/Wallabag block, matching the
+  README's setup section.
+- **Docs.** README gains the Instapaper setup section: requesting Full API
+  access from Instapaper, running the mint helper, and the 500-per-folder
+  ceiling with the folder-split workaround.
