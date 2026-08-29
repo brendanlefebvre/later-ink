@@ -182,8 +182,11 @@ def _decode_article_id(token: str) -> tuple[str, int, str, str]:
 `content_date` (via `base.parse_epoch`); `title` → the `Article.title`; `url` →
 `Article.url`. The `url` is carried so the download path can emit `DC.source` in
 the EPUB, matching Readwise and Wallabag — `get_text` returns no metadata, so
-without it in the token an Instapaper EPUB would silently drop its source URL. An
-empty string decodes back to `None` for `Article.url`.
+without it in the token an Instapaper EPUB would silently drop its source URL.
+`DC.source` travels inside the EPUB, so it points back to the original article
+even for someone who has only the file and not the OPDS feed it came through —
+provenance that survives the file being moved around. An empty string decodes
+back to `None` for `Article.url`.
 
 **No signing on the token is needed.** `get_text` is scoped to the authenticated
 account's own tokens, so a forged id can only ever produce an EPUB from the
