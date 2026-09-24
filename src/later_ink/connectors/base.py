@@ -221,6 +221,12 @@ class Connector(ABC):
         """Return (article_metadata, html_content)."""
         ...
 
+    async def close(self) -> None:
+        """Release any held resources. No-op by default; connectors that build
+        an httpx client override this to close it. Declared here so callers can
+        invoke close() on any Connector without a hasattr guard."""
+        return None
+
     async def list_views(self) -> list[Folder]:
         """Extra catalog entries that cut across locations rather than being
         one — "Short reads", "Books", and the like.

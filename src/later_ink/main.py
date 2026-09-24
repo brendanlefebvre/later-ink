@@ -134,8 +134,7 @@ async def lifespan(app: FastAPI):
         _connectors["wallabag"] = WallabagConnector(**wallabag_cfg)
     yield
     for c in _connectors.values():
-        if hasattr(c, "close"):
-            await c.close()
+        await c.close()
     _connectors.clear()
     for c in _tenant_connectors.values():
         await c.close()
