@@ -17,6 +17,7 @@ from . import __version__, config, opds, pages
 from .cache import EpubCache, build_cache, cache_key
 from .connectors import readwise
 from .connectors.base import ArticleUnavailable, Connector, Folder, UpstreamError
+from .connectors.instapaper import InstapaperConnector
 from .connectors.readwise import ReadwiseConnector
 from .connectors.wallabag import WallabagConnector
 from .epub import BUILD_VERSION, build_epub
@@ -132,6 +133,9 @@ async def lifespan(app: FastAPI):
     wallabag_cfg = config.get_wallabag_config()
     if wallabag_cfg:
         _connectors["wallabag"] = WallabagConnector(**wallabag_cfg)
+    instapaper_cfg = config.get_instapaper_config()
+    if instapaper_cfg:
+        _connectors["instapaper"] = InstapaperConnector(**instapaper_cfg)
     yield
     for c in _connectors.values():
         await c.close()

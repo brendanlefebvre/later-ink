@@ -112,3 +112,36 @@ def test_epub_cache_max_bytes_defaults(monkeypatch):
 def test_epub_cache_max_bytes_rejects_garbage(monkeypatch):
     monkeypatch.setenv("EPUB_CACHE_MAX_BYTES", "lots")
     assert config.get_epub_cache_max_bytes() == 512 * 1024 * 1024
+
+
+def test_get_instapaper_config_returns_none_when_incomplete(monkeypatch):
+    for var in (
+        "INSTAPAPER_CONSUMER_KEY",
+        "INSTAPAPER_CONSUMER_SECRET",
+        "INSTAPAPER_OAUTH_TOKEN",
+        "INSTAPAPER_OAUTH_TOKEN_SECRET",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("INSTAPAPER_CONSUMER_KEY", "ck")
+    assert config.get_instapaper_config() is None
+
+
+def test_get_instapaper_config_trims_and_returns_dict(monkeypatch):
+    monkeypatch.setenv("INSTAPAPER_CONSUMER_KEY", " ck ")
+    monkeypatch.setenv("INSTAPAPER_CONSUMER_SECRET", "cs")
+    monkeypatch.setenv("INSTAPAPER_OAUTH_TOKEN", "ot")
+    monkeypatch.setenv("INSTAPAPER_OAUTH_TOKEN_SECRET", "ots")
+    assert config.get_instapaper_config() == {
+        "consumer_key": "ck",
+        "consumer_secret": "cs",
+        "oauth_token": "ot",
+        "oauth_token_secret": "ots",
+    }
+
+
+def test_get_instapaper_config_blank_value_is_missing(monkeypatch):
+    monkeypatch.setenv("INSTAPAPER_CONSUMER_KEY", "ck")
+    monkeypatch.setenv("INSTAPAPER_CONSUMER_SECRET", "cs")
+    monkeypatch.setenv("INSTAPAPER_OAUTH_TOKEN", "ot")
+    monkeypatch.setenv("INSTAPAPER_OAUTH_TOKEN_SECRET", "   ")
+    assert config.get_instapaper_config() is None
