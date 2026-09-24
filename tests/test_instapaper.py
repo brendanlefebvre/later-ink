@@ -40,7 +40,10 @@ def test_oauth1_auth_signs_with_pinned_nonce_and_timestamp():
     assert 'oauth_signature_method="HMAC-SHA1"' in header
     assert 'oauth_nonce="pinned-nonce"' in header
     assert 'oauth_timestamp="1700000000"' in header
-    assert "oauth_signature=" in header
+    # HMAC-SHA1 with key "cs&ots" over the RFC 5849 base string for this
+    # request, computed independently of oauthlib. Includes the form-body
+    # params, so a signer that dropped the body would produce a different value.
+    assert 'oauth_signature="J1PvH2e2f3l0p5xsvGoXO0qtidI%3D"' in header
 
 
 def test_article_id_round_trips():
