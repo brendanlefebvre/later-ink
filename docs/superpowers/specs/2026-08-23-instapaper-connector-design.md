@@ -256,7 +256,8 @@ interface.
 **`get_article_html(article_id)`** — decode the token; POST `bookmarks/get_text`
 with the `bookmark_id`. On HTTP 200 the body is `text/html` (not JSON): return
 `resp.text` directly. Build the `Article` from the decoded `time`/`title`/`url`
-(see §3). An empty body or any error (see §6) raises `ArticleUnavailable`.
+(see §3). An empty body raises `ArticleUnavailable`; errors map per §6 (article-level
+codes to `ArticleUnavailable`, service and HTTP-status faults to `UpstreamError`).
 
 **`list_views()`** — inherits the base `[]`. No word count, so no reading-time
 views.
@@ -306,9 +307,17 @@ def _raise_for_json_error(items: list) -> None:
   success body is HTML and a failure body is a JSON error envelope, it **cannot
   branch on status alone** (the envelope can come with HTTP 200). It decides by
   content: if the body parses as a JSON error envelope, map its `error_code` per
-  the table below; otherwise, on a 2xx return the HTML, and on any other status
-  with no parseable envelope raise `ArticleUnavailable(422)`. An empty body is
+  the table below; otherwise pass the response through `raise_for_upstream`, so
+  a non-2xx status with no parseable envelope raises `UpstreamError` (see
+  below); on a 2xx return the HTML. An empty 2xx body is
   `ArticleUnavailable(422)`.
+
+  A bare non-2xx is `UpstreamError`, not `ArticleUnavailable`, because with no
+  envelope nothing says the fault is the article's: an HTTP 401 means the stored
+  tokens were rejected, a 5xx that Instapaper itself is failing. Reporting those
+  as "this article can't be converted" would send the reader after the wrong
+  problem. Only an envelope naming an article-level code (per the table) makes
+  the download `ArticleUnavailable`.
 
 Error-code mapping (from Instapaper's published error table):
 
@@ -329,9 +338,11 @@ Error-code mapping (from Instapaper's published error table):
 HTTP 429 → rate-limited, other 4xx/5xx → generic) and the shared
 `retry_after_seconds` on a single 429 retry, exactly as the other two
 connectors' request loops do. An OAuth signature rejection surfaces as HTTP 401.
-For `_post_text`, the JSON-envelope check runs before `raise_for_upstream`, so a
-recognised application error yields its mapped `ArticleUnavailable` rather than a
-generic HTTP-status `UpstreamError`.
+This applies to `_post_text` as well as `_post_json`. For `_post_text`, the
+JSON-envelope check runs before `raise_for_upstream`, so an application error
+envelope yields its mapped error from the table (for example
+`ArticleUnavailable(404)` for 1241 under HTTP 400) rather than a generic
+HTTP-status `UpstreamError`.
 
 ## 7. The one-time mint helper
 
