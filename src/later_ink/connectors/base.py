@@ -98,6 +98,22 @@ def parse_dt(value: str | None) -> datetime | None:
     return parsed.astimezone(UTC).replace(tzinfo=None)
 
 
+def parse_epoch(value: int | str | None) -> datetime | None:
+    """Parse a Unix epoch (seconds) as naive UTC, or None.
+
+    Instapaper timestamps are integer epochs, not ISO strings, so parse_dt
+    does not apply. Normalized to naive UTC for the same reason parse_dt is:
+    ebooklib writes dcterms:modified with a literal trailing Z and no
+    conversion, so a tz-aware value would be mislabelled.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return datetime.fromtimestamp(int(value), tz=UTC).replace(tzinfo=None)
+    except (ValueError, TypeError, OverflowError, OSError):
+        return None
+
+
 def retry_after_seconds(resp: httpx.Response, *, default: float = 2.0, cap: float = 15.0) -> float:
     """How long to wait after a 429, from Retry-After, bounded.
 
