@@ -28,6 +28,7 @@ from later_ink.connectors.base import (
     UpstreamError,
     retry_after_seconds,
 )
+from later_ink.connectors.instapaper import InstapaperConnector, _encode_article_id
 from later_ink.connectors.readwise import ReadwiseConnector
 from later_ink.connectors.wallabag import WallabagConnector
 
@@ -146,6 +147,55 @@ def _build_wallabag(handler: Callable) -> tuple[Connector, httpx.AsyncClient]:
     return connector, client
 
 
+FOLDER_ID_INSTAPAPER = "unread"
+# time 1735779845 == CONTENT_DATE_UTC (2025-01-02T01:04:05Z), so both the list
+# and download paths land on the same determinism assertion.
+_INSTAPAPER_TIME = 1735779845
+ARTICLE_ID_INSTAPAPER = _encode_article_id("42", _INSTAPAPER_TIME, "Some Title", "https://ex.com/a")
+
+
+def _build_instapaper(handler: Callable) -> tuple[Connector, httpx.AsyncClient]:
+    client = httpx.AsyncClient(
+        base_url="https://instapaper.test/api/1",
+        transport=httpx.MockTransport(handler),
+    )
+    connector = InstapaperConnector("ck", "cs", "ot", "ots", client=client)
+    return connector, client
+
+
+def _instapaper_handler(scenario: str) -> Callable:
+    bookmark = {
+        "type": "bookmark",
+        "bookmark_id": 42,
+        "title": "Some Title",
+        "url": "https://ex.com/a",
+        "description": "An excerpt",
+        "time": _INSTAPAPER_TIME,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if scenario == "unreachable":
+            raise httpx.ConnectError("boom")
+        if scenario == "error_500":
+            return httpx.Response(500, text="upstream is broken")
+        if scenario == "unauthorized":
+            return httpx.Response(401, text="")
+        if scenario == "non_json" and path.endswith("/bookmarks/list"):
+            return httpx.Response(200, text="<html>not json</html>")
+        if path.endswith("/folders/list"):
+            return httpx.Response(200, json=[{"folder_id": 100, "title": "Recipes"}])
+        if path.endswith("/bookmarks/list"):
+            return httpx.Response(200, json=[{"type": "user", "user_id": 1}, bookmark])
+        if path.endswith("/bookmarks/get_text"):
+            if scenario == "missing":
+                return httpx.Response(400, json=[{"type": "error", "error_code": 1241}])
+            return httpx.Response(200, text="<article><p>Body</p></article>")
+        return httpx.Response(200, json=[])
+
+    return handler
+
+
 SPECS = [
     ConnectorSpec(
         label="readwise",
@@ -162,6 +212,14 @@ SPECS = [
         handlers=_wallabag_handler,
         folder_id=FOLDER_ID_WALLABAG,
         article_id=ARTICLE_ID,
+    ),
+    ConnectorSpec(
+        label="instapaper",
+        cls=InstapaperConnector,
+        build=_build_instapaper,
+        handlers=_instapaper_handler,
+        folder_id=FOLDER_ID_INSTAPAPER,
+        article_id=ARTICLE_ID_INSTAPAPER,
     ),
 ]
 
@@ -282,6 +340,22 @@ def test_close_releases_the_http_client_and_is_safe_to_call_twice(spec):
         await conn.close()
 
     asyncio.run(go())
+
+
+def test_view_ids_do_not_collide_with_folder_ids(spec):
+    async def go():
+        conn, client = spec.build(spec.handlers("ok"))
+        try:
+            folder_ids = {f.id for f in await conn.list_folders()}
+            view_ids = {v.id for v in await conn.list_views()}
+        finally:
+            await conn.close()
+        return folder_ids, view_ids
+
+    folder_ids, view_ids = asyncio.run(go())
+    assert folder_ids.isdisjoint(view_ids), (
+        f"{spec.label}: view ids collide with folder ids: {folder_ids & view_ids}"
+    )
 
 
 def _all_subclasses(cls: type) -> set[type]:

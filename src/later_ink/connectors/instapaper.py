@@ -1,10 +1,36 @@
+import asyncio
 import base64
 import json
 
 import httpx
 import oauthlib.oauth1  # NB: `import oauthlib` alone does not expose the oauth1 submodule
 
-from .base import ArticleUnavailable, UpstreamError
+from .base import (
+    Article,
+    ArticleUnavailable,
+    Connector,
+    Folder,
+    UpstreamError,
+    decode_json,
+    parse_epoch,
+    raise_for_upstream,
+    retry_after_seconds,
+)
+
+BASE_URL = "https://www.instapaper.com/api/1"
+
+# Instapaper's three implicit locations. folders/list returns only user-created
+# folders; these are always present and lead the list.
+BUILTIN_FOLDERS = [
+    Folder("unread", "Unread", "Bookmarks you haven't archived"),
+    Folder("starred", "Starred", "Bookmarks you've starred"),
+    Folder("archive", "Archive", "Bookmarks you've archived"),
+]
+
+# The most-recent items per folder the API will return. There is no forward
+# pagination (the `have` parameter is delta-sync, not a cursor), so this is the
+# whole reachable window for a folder.
+_LIST_LIMIT = "500"
 
 
 def _encode_article_id(bookmark_id: str, time: int, title: str, url: str | None) -> str:
@@ -120,3 +146,120 @@ class _OAuth1Auth(httpx.Auth):
         )
         request.headers["Authorization"] = headers["Authorization"]
         yield request
+
+
+def _article_from_bookmark(bm: dict) -> Article:
+    bookmark_id = str(bm["bookmark_id"])
+    title = bm.get("title") or "Untitled"
+    url = bm.get("url")
+    time = int(bm.get("time") or 0)
+    return Article(
+        id=_encode_article_id(bookmark_id, time, title, url),
+        title=title,
+        url=url,
+        summary=bm.get("description") or None,
+        # Instapaper's list payload carries no author, word count, language,
+        # category, or image.
+        content_date=parse_epoch(bm.get("time")),
+    )
+
+
+class InstapaperConnector(Connector):
+    name = "instapaper"
+    description = "Instapaper"
+
+    def __init__(
+        self,
+        consumer_key: str,
+        consumer_secret: str,
+        oauth_token: str,
+        oauth_token_secret: str,
+        client: httpx.AsyncClient | None = None,
+    ):
+        # An injected client is taken as-is (the test seam); it is not signed,
+        # which is fine because a MockTransport does not verify signatures.
+        self._client = client or httpx.AsyncClient(
+            base_url=BASE_URL,
+            timeout=30.0,
+            auth=_OAuth1Auth(consumer_key, consumer_secret, oauth_token, oauth_token_secret),
+        )
+
+    async def _request(self, path: str, data: dict[str, str]) -> httpx.Response:
+        """POST with one retry on 429 (honoring Retry-After) and a readable
+        transport error. Status/body interpretation is the caller's job."""
+        for attempt in (0, 1):
+            try:
+                resp = await self._client.post(path, data=data)
+            except httpx.HTTPError as e:
+                raise UpstreamError(f"Could not reach Instapaper: {type(e).__name__}") from e
+            if resp.status_code == 429 and attempt == 0:
+                await asyncio.sleep(retry_after_seconds(resp))
+                continue
+            break
+        return resp
+
+    async def _post_json(self, path: str, data: dict[str, str]) -> list:
+        """For the JSON array endpoints. Guards the top-level shape: decode_json
+        is typed Any, and a stray object would make the error scan miss the fault
+        and the caller's .get() filter raise AttributeError -> a 500, the exact
+        failure class base.decode_json exists to prevent."""
+        resp = await self._request(path, data)
+        raise_for_upstream(resp, "Instapaper")
+        payload = decode_json(resp, "Instapaper")
+        if not isinstance(payload, list):
+            raise UpstreamError("Instapaper returned an unexpected response")
+        _raise_for_json_error(payload)
+        return payload
+
+    async def _post_text(self, path: str, data: dict[str, str]) -> str:
+        """For bookmarks/get_text. A success body is HTML; a failure body is a
+        JSON error envelope, possibly under HTTP 200 — so decide by body first."""
+        resp = await self._request(path, data)
+        body = resp.text
+        err = _parse_error_envelope(body)
+        if err is not None:
+            _raise_for_get_text_error(err)  # always raises
+        raise_for_upstream(resp, "Instapaper")  # HTTP 401/429/4xx/5xx with no envelope
+        if not body.strip():
+            raise ArticleUnavailable(
+                "Instapaper returned no readable text for this article.", status=422
+            )
+        return body
+
+    async def list_folders(self) -> list[Folder]:
+        data = await self._post_json("folders/list", {})
+        custom = [
+            Folder(str(f["folder_id"]), f.get("title") or str(f["folder_id"]))
+            for f in data
+            if isinstance(f, dict) and "folder_id" in f
+        ]
+        return [*BUILTIN_FOLDERS, *custom]
+
+    async def list_articles(
+        self, folder_id: str, cursor: str | None = None
+    ) -> tuple[list[Article], str | None]:
+        # No forward pagination: return the recent window, no cursor. `cursor`
+        # is accepted only to satisfy the interface.
+        data = await self._post_json(
+            "bookmarks/list", {"folder_id": folder_id, "limit": _LIST_LIMIT}
+        )
+        articles = [
+            _article_from_bookmark(o)
+            for o in data
+            if isinstance(o, dict) and o.get("type") == "bookmark"
+        ]
+        return articles, None
+
+    async def get_article_html(self, article_id: str) -> tuple[Article, str]:
+        bookmark_id, time, title, url = _decode_article_id(article_id)
+        html = await self._post_text("bookmarks/get_text", {"bookmark_id": bookmark_id})
+        article = Article(
+            id=article_id,
+            title=title,
+            url=url or None,
+            content_date=parse_epoch(time),
+        )
+        return article, html
+
+    async def close(self) -> None:
+        await self._client.aclose()

@@ -1,11 +1,14 @@
+import asyncio
 import base64
 import json
+from datetime import datetime
 
 import httpx
 import pytest
 
 from later_ink.connectors.base import ArticleUnavailable, UpstreamError
 from later_ink.connectors.instapaper import (
+    InstapaperConnector,
     _decode_article_id,
     _encode_article_id,
     _OAuth1Auth,
@@ -117,3 +120,117 @@ def test_raise_for_get_text_error_unknown_code_is_article_unavailable_422():
     with pytest.raises(ArticleUnavailable) as e:
         _raise_for_get_text_error({"type": "error", "error_code": 9999})
     assert e.value.status == 422
+
+
+_BOOKMARK = {
+    "type": "bookmark",
+    "bookmark_id": 42,
+    "title": "Some Title",
+    "url": "https://example.com/a",
+    "description": "An excerpt",
+    "time": 1735779845,
+}
+
+
+def _conn(handler):
+    client = httpx.AsyncClient(
+        base_url="https://instapaper.test/api/1",
+        transport=httpx.MockTransport(handler),
+    )
+    return InstapaperConnector("ck", "cs", "ot", "ots", client=client), client
+
+
+def test_list_folders_has_builtins_then_custom():
+    def handler(request):
+        assert request.url.path.endswith("/folders/list")
+        return httpx.Response(200, json=[{"folder_id": 100, "title": "Recipes"}])
+
+    conn, client = _conn(handler)
+
+    async def go():
+        folders = await conn.list_folders()
+        await conn.close()
+        return folders
+
+    folders = asyncio.run(go())
+    assert [f.id for f in folders] == ["unread", "starred", "archive", "100"]
+    assert folders[-1].title == "Recipes"
+
+
+def test_list_articles_maps_bookmark_and_has_no_cursor():
+    def handler(request):
+        assert request.url.path.endswith("/bookmarks/list")
+        return httpx.Response(200, json=[{"type": "user", "user_id": 1}, _BOOKMARK])
+
+    conn, client = _conn(handler)
+
+    async def go():
+        result = await conn.list_articles("unread")
+        await conn.close()
+        return result
+
+    articles, cursor = asyncio.run(go())
+    assert cursor is None
+    assert len(articles) == 1
+    a = articles[0]
+    assert a.title == "Some Title"
+    assert a.url == "https://example.com/a"
+    assert a.summary == "An excerpt"
+    assert a.content_date == datetime(2025, 1, 2, 1, 4, 5)
+
+
+def test_list_articles_rejects_non_list_shape():
+    def handler(request):
+        return httpx.Response(200, json={"type": "error", "error_code": 1500})
+
+    conn, client = _conn(handler)
+
+    async def go():
+        try:
+            await conn.list_articles("unread")
+        finally:
+            await conn.close()
+
+    with pytest.raises(UpstreamError):
+        asyncio.run(go())
+
+
+def test_get_article_html_returns_html_and_reconstructs_metadata():
+    token = _encode_article_id("42", 1735779845, "Some Title", "https://example.com/a")
+
+    def handler(request):
+        assert request.url.path.endswith("/bookmarks/get_text")
+        return httpx.Response(200, text="<article><p>Body</p></article>")
+
+    conn, client = _conn(handler)
+
+    async def go():
+        result = await conn.get_article_html(token)
+        await conn.close()
+        return result
+
+    article, html = asyncio.run(go())
+    assert "<p>Body</p>" in html
+    assert article.title == "Some Title"
+    assert article.url == "https://example.com/a"
+    assert article.content_date == datetime(2025, 1, 2, 1, 4, 5)
+
+
+def test_get_article_html_maps_error_envelope_under_http_200():
+    token = _encode_article_id("42", 1735779845, "t", "u")
+
+    def handler(request):
+        # An error envelope arriving under HTTP 200 must still be treated as an error.
+        return httpx.Response(200, json=[{"type": "error", "error_code": 1241}])
+
+    conn, client = _conn(handler)
+
+    async def go():
+        try:
+            await conn.get_article_html(token)
+        finally:
+            await conn.close()
+
+    with pytest.raises(ArticleUnavailable) as e:
+        asyncio.run(go())
+    assert e.value.status == 404
