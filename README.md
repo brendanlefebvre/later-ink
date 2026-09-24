@@ -133,6 +133,27 @@ generated cover. A podcast converts only after you've loaded its transcript in
 Readwise Reader (until then the API returns a stub, and the download reports
 that). Configurable via `READWISE_CATEGORIES` (e.g. `article,pdf`).
 
+### Instapaper
+
+Instapaper's Full API needs an OAuth 1.0a consumer key and secret. Request API
+access from Instapaper (see <https://www.instapaper.com/api>) — each self-hosted
+deployment needs its own; later.ink cannot ship one.
+
+Mint the per-account token pair once (your password is never stored):
+
+    python -m later_ink.instapaper_auth
+
+Then set all four variables:
+
+    INSTAPAPER_CONSUMER_KEY=...
+    INSTAPAPER_CONSUMER_SECRET=...
+    INSTAPAPER_OAUTH_TOKEN=...          # from the mint step
+    INSTAPAPER_OAUTH_TOKEN_SECRET=...   # from the mint step
+
+Note: Instapaper's API returns at most the 500 most-recent bookmarks per folder
+and has no pagination beyond that. To reach older items, move them into
+additional Instapaper folders (each folder exposes its own most-recent 500).
+
 ### Reading the same article on two devices
 
 Downloads are byte-identical for a given article, which is what
@@ -206,15 +227,18 @@ src/later_ink/
   ratelimit.py     # per-IP throttles: unknown-secret probes, signups, feeds
   pages.py         # server-rendered HTML pages
   payments.py      # Stripe verification (optional; inactive unless configured)
+  instapaper_auth.py # one-time Instapaper token mint (xAuth)
   connectors/
     base.py        # Connector interface: folders / views / articles / article HTML
     readwise.py    # Readwise Reader API v3 connector
     wallabag.py    # Wallabag API v2 connector (OAuth2)
+    instapaper.py  # Instapaper Full API connector (OAuth 1.0a)
 ```
 
-Readwise and [Wallabag](https://wallabag.org/) are supported today (set the
-`WALLABAG_*` vars in `.env.example` to enable Wallabag). More connectors
-(Instapaper) are planned — the connector interface is three required methods.
+Readwise, [Wallabag](https://wallabag.org/), and
+[Instapaper](https://www.instapaper.com/) are supported today (set the
+`WALLABAG_*` or `INSTAPAPER_*` vars in `.env.example` to enable the latter two).
+The connector interface is three required methods.
 
 ## Development
 
