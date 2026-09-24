@@ -1,5 +1,43 @@
+import base64
+import json
+
 import httpx
 import oauthlib.oauth1  # NB: `import oauthlib` alone does not expose the oauth1 submodule
+
+from .base import ArticleUnavailable
+
+
+def _encode_article_id(bookmark_id: str, time: int, title: str, url: str | None) -> str:
+    """Pack the metadata get_text cannot return into the article id.
+
+    A bookmark's save `time` never changes, so freezing it here keeps
+    content_date (and thus the EPUB's dcterms:modified) deterministic without a
+    second fetch. base64url of a compact JSON object, no padding — URL- and
+    cache-key-safe.
+    """
+    raw = json.dumps(
+        {"i": bookmark_id, "t": time, "n": title, "u": url or ""},
+        separators=(",", ":"),
+    )
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_article_id(token: str) -> tuple[str, int, str, str]:
+    """Inverse of _encode_article_id, returning (bookmark_id, time, title, url).
+
+    A malformed or forged token is not a server failure — it names an article
+    the user cannot have — so it surfaces as ArticleUnavailable(404), not a 500.
+    No signature is needed: get_text is scoped to the authenticated account, so
+    a forged id can only ever build an EPUB from the requester's own library
+    with attacker-chosen metadata on their own download; the url rides only into
+    DC.source, never into a request.
+    """
+    try:
+        pad = "=" * (-len(token) % 4)
+        data = json.loads(base64.urlsafe_b64decode(token + pad))
+        return str(data["i"]), int(data["t"]), str(data["n"]), str(data["u"])
+    except (ValueError, KeyError, TypeError) as e:
+        raise ArticleUnavailable("This article link is invalid.", status=404) from e
 
 
 class _OAuth1Auth(httpx.Auth):
