@@ -237,3 +237,49 @@ def test_get_article_html_maps_error_envelope_under_http_200():
     with pytest.raises(ArticleUnavailable) as e:
         asyncio.run(go())
     assert e.value.status == 404
+
+
+def test_article_id_round_trips_missing_time():
+    token = _encode_article_id("42", None, "t", "u")
+    assert _decode_article_id(token) == ("42", None, "t", "u")
+
+
+def _list_then_download(bookmark):
+    """List a folder holding `bookmark` and a good one, then download each by its
+    listed id — the two paths the determinism contract requires to agree."""
+
+    def handler(request):
+        if request.url.path.endswith("/bookmarks/list"):
+            return httpx.Response(200, json=[bookmark, _BOOKMARK])
+        return httpx.Response(200, text="<article><p>Body</p></article>")
+
+    conn, _client = _conn(handler)
+
+    async def go():
+        try:
+            listed, _ = await conn.list_articles("unread")
+            downloaded = [(await conn.get_article_html(a.id))[0] for a in listed]
+            return listed, downloaded
+        finally:
+            await conn.close()
+
+    return asyncio.run(go())
+
+
+@pytest.mark.parametrize(
+    "bad_time", [None, "", "not-an-int"], ids=["missing", "blank", "non-numeric"]
+)
+def test_unusable_time_gives_no_content_date_on_both_paths(bad_time):
+    bookmark = {"type": "bookmark", "bookmark_id": 7, "title": "t", "url": "u"}
+    if bad_time is not None:
+        bookmark["time"] = bad_time
+
+    listed, downloaded = _list_then_download(bookmark)
+
+    # One bad bookmark must not take the folder down: the good one still lists.
+    assert [a.title for a in listed] == ["t", "Some Title"]
+    # Unknown, not the epoch: list and download must agree on None.
+    assert listed[0].content_date is None
+    assert downloaded[0].content_date is None
+    # The good bookmark is unaffected on either path.
+    assert listed[1].content_date == downloaded[1].content_date == datetime(2025, 1, 2, 1, 4, 5)

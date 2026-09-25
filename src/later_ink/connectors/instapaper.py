@@ -33,13 +33,14 @@ BUILTIN_FOLDERS = [
 _LIST_LIMIT = "500"
 
 
-def _encode_article_id(bookmark_id: str, time: int, title: str, url: str | None) -> str:
+def _encode_article_id(bookmark_id: str, time: int | None, title: str, url: str | None) -> str:
     """Pack the metadata get_text cannot return into the article id.
 
     A bookmark's save `time` never changes, so freezing it here keeps
     content_date (and thus the EPUB's dcterms:modified) deterministic without a
-    second fetch. base64url of a compact JSON object, no padding — URL- and
-    cache-key-safe.
+    second fetch. A None time (upstream sent none usable) is carried as null so
+    the download path reports the same "unknown" the list path did. base64url of
+    a compact JSON object, no padding — URL- and cache-key-safe.
     """
     raw = json.dumps(
         {"i": bookmark_id, "t": time, "n": title, "u": url or ""},
@@ -48,7 +49,7 @@ def _encode_article_id(bookmark_id: str, time: int, title: str, url: str | None)
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
-def _decode_article_id(token: str) -> tuple[str, int, str, str]:
+def _decode_article_id(token: str) -> tuple[str, int | None, str, str]:
     """Inverse of _encode_article_id, returning (bookmark_id, time, title, url).
 
     A malformed or forged token is not a server failure — it names an article
@@ -61,7 +62,8 @@ def _decode_article_id(token: str) -> tuple[str, int, str, str]:
     try:
         pad = "=" * (-len(token) % 4)
         data = json.loads(base64.urlsafe_b64decode(token + pad))
-        return str(data["i"]), int(data["t"]), str(data["n"]), str(data["u"])
+        time = None if data["t"] is None else int(data["t"])
+        return str(data["i"]), time, str(data["n"]), str(data["u"])
     except (ValueError, KeyError, TypeError) as e:
         raise ArticleUnavailable("This article link is invalid.", status=404) from e
 
@@ -148,11 +150,25 @@ class _OAuth1Auth(httpx.Auth):
         yield request
 
 
+def _parse_time(value) -> int | None:
+    """A bookmark's save time as an int epoch, or None if missing or malformed.
+
+    Parsed once, here, so the list path and the id-encoded download path derive
+    content_date from the same value. Defaulting to 0 instead would date the
+    download 1970-01-01 while the list said unknown — and an int() that raised
+    would turn one bad bookmark into a 500 for the whole folder.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _article_from_bookmark(bm: dict) -> Article:
     bookmark_id = str(bm["bookmark_id"])
     title = bm.get("title") or "Untitled"
     url = bm.get("url")
-    time = int(bm.get("time") or 0)
+    time = _parse_time(bm.get("time"))
     return Article(
         id=_encode_article_id(bookmark_id, time, title, url),
         title=title,
@@ -160,7 +176,7 @@ def _article_from_bookmark(bm: dict) -> Article:
         summary=bm.get("description") or None,
         # Instapaper's list payload carries no author, word count, language,
         # category, or image.
-        content_date=parse_epoch(bm.get("time")),
+        content_date=parse_epoch(time),
     )
 
 
