@@ -403,6 +403,10 @@ lxml==6.1.1 \
     # via
     #   later-ink (pyproject.toml)
     #   ebooklib
+oauthlib==4.0.0 \
+    --hash=sha256:624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd \
+    --hash=sha256:efb274799819440f95b4ab3b818869f1ce9ae26c5beacba0201d1a1b76b54f86
+    # via later-ink (pyproject.toml)
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
