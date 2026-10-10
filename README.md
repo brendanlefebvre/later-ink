@@ -143,6 +143,10 @@ Mint the per-account token pair once (your password is never stored):
 
     python -m later_ink.instapaper_auth
 
+The helper signs in with your Instapaper username and password, so an
+account without a password (Instapaper allows that) needs one set in
+Instapaper's account settings before it can mint tokens.
+
 Then set all four variables:
 
     INSTAPAPER_CONSUMER_KEY=...
