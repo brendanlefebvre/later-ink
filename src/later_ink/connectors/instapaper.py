@@ -139,12 +139,16 @@ class _OAuth1Auth(httpx.Auth):
         )
 
     def auth_flow(self, request):
+        # Only claim a form body when there is one. folders/list takes no
+        # parameters, and oauthlib rejects a form Content-Type with no body
+        # (ValueError) — which escaped as a 500 on the whole catalog.
         body = request.content.decode() if request.content else None
+        headers = {"Content-Type": "application/x-www-form-urlencoded"} if body else {}
         _uri, headers, _body = self._client.sign(
             str(request.url),
             http_method=request.method,
             body=body,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            headers=headers,
         )
         request.headers["Authorization"] = headers["Authorization"]
         yield request
@@ -250,10 +254,11 @@ class InstapaperConnector(Connector):
         if err is not None:
             _raise_for_get_text_error(err)  # always raises
         if resp.status_code == 400:
-            # get_text answers with a bare 400, no envelope, both for a deleted
-            # bookmark and for one with no extractable text. Either way the
-            # problem is this article, not the service, so the reader gets a
-            # readable reason rather than a generic upstream error.
+            # Observed live (2026-10-10), get_text's 400s carry an envelope:
+            # 1241 for a missing bookmark, 1550 when no text could be
+            # generated, both handled above. This catches a 400 that arrives
+            # without one: on a get_text call, a 400 is about this article,
+            # not the service, so the reader still gets a readable reason.
             raise ArticleUnavailable(
                 "Instapaper has no readable text for this item; it may have "
                 "been deleted or never processed.",

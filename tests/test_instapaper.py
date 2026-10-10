@@ -300,9 +300,9 @@ def _download_with(response: httpx.Response):
 
 
 def test_get_text_bare_400_is_an_unavailable_article():
-    # Instapaper answers get_text with a bare 400, no error envelope, both for a
-    # deleted bookmark and for one with no extractable text. That is a problem
-    # with the article, not the service, so the reader gets a readable reason.
+    # Live, get_text's 400s carry an error envelope (1241, 1550). A 400 that
+    # arrives without one is still about the article, not the service, so the
+    # reader gets a readable reason rather than a generic upstream error.
     with pytest.raises(ArticleUnavailable) as e:
         _download_with(httpx.Response(400, text="Bad Request"))
     assert e.value.status == 422
@@ -343,3 +343,43 @@ def test_list_redirect_is_not_accepted_as_a_listing():
 
     with pytest.raises(UpstreamError):
         asyncio.run(go())
+
+
+def test_oauth1_auth_signs_a_request_with_no_body():
+    # folders/list takes no parameters, so its POST has an empty body. Passing a
+    # form Content-Type for an empty body made oauthlib raise ValueError, which
+    # escaped as a 500 on the whole Instapaper catalog.
+    auth = _OAuth1Auth("ck", "cs", "ot", "ots")
+    request = httpx.Request("POST", "https://www.instapaper.com/api/1/folders/list", data={})
+    signed = next(auth.auth_flow(request))
+    assert signed.headers["Authorization"].startswith("OAuth ")
+
+
+def test_signed_client_drives_list_folders_and_list_articles():
+    # Every other test injects an unsigned client, so the signer never sees the
+    # connector's real requests. This one keeps the signer on the injected client.
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, request.headers.get("Authorization", "")))
+        if request.url.path.endswith("/folders/list"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json=[_BOOKMARK])
+
+    client = httpx.AsyncClient(
+        base_url="https://instapaper.test/api/1",
+        transport=httpx.MockTransport(handler),
+        auth=_OAuth1Auth("ck", "cs", "ot", "ots"),
+    )
+    conn = InstapaperConnector("ck", "cs", "ot", "ots", client=client)
+
+    async def go():
+        try:
+            await conn.list_folders()
+            await conn.list_articles("unread")
+        finally:
+            await conn.close()
+
+    asyncio.run(go())
+    assert [p.rsplit("/", 1)[-1] for p, _ in seen] == ["list", "list"]
+    assert all(h.startswith("OAuth ") for _, h in seen)
