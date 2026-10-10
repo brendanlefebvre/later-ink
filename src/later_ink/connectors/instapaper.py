@@ -27,9 +27,11 @@ BUILTIN_FOLDERS = [
     Folder("archive", "Archive", "Bookmarks you've archived"),
 ]
 
-# The most-recent items per folder the API will return. There is no forward
-# pagination (the `have` parameter is delta-sync, not a cursor), so this is the
-# whole reachable window for a folder.
+# The most we ask for per folder: the API's documented maximum. There is no
+# forward pagination (the `have` parameter is delta-sync, not a cursor), so
+# whatever comes back is the whole reachable window. Observed live
+# (2026-10-10), Archive returns at most 200 whatever the limit; other folders
+# honor up to 500.
 _LIST_LIMIT = "500"
 
 

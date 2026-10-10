@@ -154,9 +154,11 @@ Then set all four variables:
     INSTAPAPER_OAUTH_TOKEN=...          # from the mint step
     INSTAPAPER_OAUTH_TOKEN_SECRET=...   # from the mint step
 
-Note: Instapaper's API returns at most the 500 most-recent bookmarks per folder
-and has no pagination beyond that. To reach older items, move them into
-additional Instapaper folders (each folder exposes its own most-recent 500).
+Note: Instapaper's API returns only the most recent bookmarks in each folder,
+with no pagination beyond that: up to 500 for Unread, Starred and your own
+folders, but only 200 for Archive. To reach older items, move them into
+additional Instapaper folders, since each folder exposes its own most-recent
+window.
 
 ### Reading the same article on two devices
 
