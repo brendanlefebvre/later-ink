@@ -1,7 +1,6 @@
 version: 2
 
-# Actions and the Docker base image, deliberately — plus one narrowly scoped
-# Python entry.
+# Actions and the Docker base image, deliberately. No Python entry.
 #
 # The point of this file is to make SHA-pinned actions maintainable. A pin with
 # nothing to bump it goes stale, and a stale pin is its own risk — which is why
@@ -9,27 +8,25 @@ version: 2
 # SHA-pinned `uses:` and updates both the hash and the trailing version comment,
 # so the pins stay current without anyone resolving hashes by hand.
 #
-# The Python entry below is scoped to /.github deliberately, and the scoping is
-# load-bearing rather than tidiness. Dependabot's pip ecosystem matches broadly
-# — it scans *.txt and inspects contents to decide what is a manifest — so an
-# entry rooted at / would also try to update requirements.txt,
-# requirements-dev.txt and requirements-build.txt. Those are hash-pinned output
-# from `uv pip compile`, which falls between Dependabot's two Python
-# ecosystems: its pip-compile support expects a requirements.in source, and its
-# native uv ecosystem expects a uv.lock from uv's project mode rather than the
-# pip-compatible mode used here. Pointing it at them invites pull requests with
-# missing or wrong hashes.
+# None of the Python lockfiles is automated. They are hash-pinned output from
+# `uv pip compile`, which falls between Dependabot's two Python ecosystems: its
+# pip-compile support expects a pip-tools workflow, and its native uv
+# ecosystem expects a uv.lock from uv's project mode rather than the
+# pip-compatible mode used here.
 #
-# .github/requirements-ci.txt does have a .in source, which is the shape
-# Dependabot's pip-compile support is built for, so it is the one Python file
-# here it stands a good chance of maintaining correctly. Treat that as unproven
-# until a pull request actually arrives: if none does, or one arrives with
-# broken hashes, drop this entry and bump the file by hand.
+# .github/requirements-ci.txt was tried anyway, since it has a .in source,
+# under an entry scoped to /.github. The trial failed the way this file said it
+# might: the first pull request it produced (#42) dropped typing-extensions,
+# which cyclonedx-python-lib needs below Python 3.13. The lock is compiled
+# --universal for 3.11, and Dependabot's regeneration evidently didn't honor
+# that, so the file it wrote would not install on CI's Python 3.12. The entry
+# was removed rather than repaired by hand once a month.
 #
 # The files left unautomated are not left unchecked. The audit job runs
 # pip-audit --require-hashes over every lockfile on each pull request and
 # release, so a dependency picking up a CVE fails visibly. What stays manual is
-# routine version freshness; the regenerate commands are in README.md.
+# routine version freshness; the regenerate commands are in README.md, and
+# --upgrade-package <name> bumps one dependency without moving the rest.
 updates:
   - package-ecosystem: github-actions
     directory: "/"
@@ -118,17 +115,3 @@ updates:
         update-types:
           - "version-update:semver-major"
           - "version-update:semver-minor"
-
-  # CI tooling only — build and pip-audit. See the note above on why this is
-  # scoped to /.github and why no entry covers the repository root.
-  - package-ecosystem: pip
-    directory: "/.github"
-    schedule:
-      interval: monthly
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: ci
-    groups:
-      ci-tooling:
-        patterns:
-          - "*"
