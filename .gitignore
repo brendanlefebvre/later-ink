@@ -9,3 +9,11 @@ build/
 .pytest_cache/
 data/
 *.db
+
+# Planning docs (specs, plans, reviews, handoffs) stay off every pushed branch.
+# They live on local-only spec/* branches, added there with `git add -f`.
+docs/superpowers/
+
+# superpowers' working directory while it executes a plan: progress ledger,
+# task briefs, review packages. Scratch, specific to one machine and run.
+.superpowers/
