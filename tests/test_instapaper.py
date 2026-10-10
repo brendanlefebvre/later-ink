@@ -283,3 +283,63 @@ def test_unusable_time_gives_no_content_date_on_both_paths(bad_time):
     assert downloaded[0].content_date is None
     # The good bookmark is unaffected on either path.
     assert listed[1].content_date == downloaded[1].content_date == datetime(2025, 1, 2, 1, 4, 5)
+
+
+def _download_with(response: httpx.Response):
+    """Download one article against a get_text that answers with `response`."""
+    token = _encode_article_id("42", 1735779845, "Some Title", "https://example.com/a")
+    conn, _client = _conn(lambda request: response)
+
+    async def go():
+        try:
+            return await conn.get_article_html(token)
+        finally:
+            await conn.close()
+
+    return asyncio.run(go())
+
+
+def test_get_text_bare_400_is_an_unavailable_article():
+    # Instapaper answers get_text with a bare 400, no error envelope, both for a
+    # deleted bookmark and for one with no extractable text. That is a problem
+    # with the article, not the service, so the reader gets a readable reason.
+    with pytest.raises(ArticleUnavailable) as e:
+        _download_with(httpx.Response(400, text="Bad Request"))
+    assert e.value.status == 422
+
+
+@pytest.mark.parametrize("status", [401, 429, 500, 503])
+def test_get_text_bare_service_failures_stay_upstream_errors(status):
+    # A rejected token or a failing service must not be reported as a bad article.
+    with pytest.raises(UpstreamError) as e:
+        _download_with(httpx.Response(status, text=""))
+    assert e.value.status == status
+
+
+def test_get_text_redirect_is_not_accepted_as_the_article():
+    # httpx doesn't follow redirects, so without a 2xx check a redirect's body
+    # (a sign-in or interstitial page) would be turned into the EPUB.
+    with pytest.raises(UpstreamError):
+        _download_with(
+            httpx.Response(
+                302,
+                headers={"Location": "http://portal.example/login"},
+                text="<html><body>Please sign in to the Wi-Fi</body></html>",
+            )
+        )
+
+
+def test_list_redirect_is_not_accepted_as_a_listing():
+    def handler(request):
+        return httpx.Response(302, headers={"Location": "http://elsewhere.example/"}, json=[_BOOKMARK])
+
+    conn, _client = _conn(handler)
+
+    async def go():
+        try:
+            await conn.list_articles("unread")
+        finally:
+            await conn.close()
+
+    with pytest.raises(UpstreamError):
+        asyncio.run(go())

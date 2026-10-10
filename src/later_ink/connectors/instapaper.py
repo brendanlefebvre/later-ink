@@ -164,6 +164,19 @@ def _parse_time(value) -> int | None:
         return None
 
 
+def _require_success(resp: httpx.Response) -> None:
+    """Reject anything that isn't a 2xx once raise_for_upstream has had its turn.
+
+    raise_for_upstream only handles 4xx/5xx, and httpx does not follow
+    redirects, so a 3xx would otherwise be read as a successful answer: for
+    get_text, a sign-in or interstitial page turned into the EPUB.
+    """
+    if not 200 <= resp.status_code < 300:
+        raise UpstreamError(
+            f"Instapaper returned an unexpected response ({resp.status_code})", 502
+        )
+
+
 def _article_from_bookmark(bm: dict) -> Article:
     bookmark_id = str(bm["bookmark_id"])
     title = bm.get("title") or "Untitled"
@@ -221,6 +234,7 @@ class InstapaperConnector(Connector):
         failure class base.decode_json exists to prevent."""
         resp = await self._request(path, data)
         raise_for_upstream(resp, "Instapaper")
+        _require_success(resp)
         payload = decode_json(resp, "Instapaper")
         if not isinstance(payload, list):
             raise UpstreamError("Instapaper returned an unexpected response")
@@ -235,7 +249,18 @@ class InstapaperConnector(Connector):
         err = _parse_error_envelope(body)
         if err is not None:
             _raise_for_get_text_error(err)  # always raises
-        raise_for_upstream(resp, "Instapaper")  # HTTP 401/429/4xx/5xx with no envelope
+        if resp.status_code == 400:
+            # get_text answers with a bare 400, no envelope, both for a deleted
+            # bookmark and for one with no extractable text. Either way the
+            # problem is this article, not the service, so the reader gets a
+            # readable reason rather than a generic upstream error.
+            raise ArticleUnavailable(
+                "Instapaper has no readable text for this item; it may have "
+                "been deleted or never processed.",
+                status=422,
+            )
+        raise_for_upstream(resp, "Instapaper")  # 401, 429, other 4xx, 5xx: the service
+        _require_success(resp)
         if not body.strip():
             raise ArticleUnavailable(
                 "Instapaper returned no readable text for this article.", status=422
