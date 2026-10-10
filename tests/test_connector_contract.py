@@ -14,7 +14,8 @@ import inspect
 import pkgutil
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 
 import httpx
 import pytest
@@ -439,3 +440,25 @@ def test_retry_after_seconds_falls_back_to_default_on_nan():
 def test_retry_after_seconds_falls_back_to_default_on_a_non_numeric_value():
     resp = httpx.Response(429, headers={"Retry-After": "soon"})
     assert retry_after_seconds(resp) == 2.0
+
+
+# Retry-After may also be an HTTP-date (RFC 9110 section 10.2.3): wait until
+# that moment. These build the header from the current clock, so they allow a
+# little slack rather than asserting an exact figure.
+
+
+def _retry_at(delta_seconds: float) -> httpx.Response:
+    when = datetime.now(UTC) + timedelta(seconds=delta_seconds)
+    return httpx.Response(429, headers={"Retry-After": format_datetime(when, usegmt=True)})
+
+
+def test_retry_after_seconds_honours_an_http_date():
+    assert 8.0 <= retry_after_seconds(_retry_at(10)) <= 10.0
+
+
+def test_retry_after_seconds_caps_a_far_future_http_date():
+    assert retry_after_seconds(_retry_at(3600)) == 15.0
+
+
+def test_retry_after_seconds_treats_a_past_http_date_as_retry_now():
+    assert retry_after_seconds(_retry_at(-60)) == 0.0
