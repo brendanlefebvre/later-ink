@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -129,14 +130,33 @@ def retry_after_seconds(resp: httpx.Response, *, default: float = 2.0, cap: floa
     so it's left to fall through to the min() below rather than rejected —
     rejecting it would make an infinite request wait *less* than a merely
     huge one like "999", which is backwards.
+
+    Retry-After may also be an HTTP-date (RFC 9110 section 10.2.3), meaning
+    "not before then". It's honoured as the time remaining, under the same cap.
+    A date already past means retry now, so 0, not the default: unlike "-1",
+    it's a well-formed instruction, not a malformed one.
     """
-    try:
-        seconds = float(resp.headers.get("Retry-After", default))
-    except ValueError:
+    value = resp.headers.get("Retry-After")
+    if value is None:
         return default
+    try:
+        seconds = float(value)
+    except ValueError:
+        return _retry_after_date(value, default=default, cap=cap)
     if math.isnan(seconds) or seconds < 0:
         return default
     return min(seconds, cap)
+
+
+def _retry_after_date(value: str, *, default: float, cap: float) -> float:
+    """Seconds until an HTTP-date Retry-After, bounded; default if it isn't one."""
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return default
+    if when.tzinfo is None:  # RFC 5322's "-0000": no zone given, read as UTC
+        when = when.replace(tzinfo=UTC)
+    return min(max((when - datetime.now(UTC)).total_seconds(), 0.0), cap)
 
 
 def raise_for_upstream(resp: httpx.Response, service: str) -> None:

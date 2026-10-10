@@ -28,12 +28,26 @@ MIXED = {
 }
 
 
-def _list(conn: ReadwiseConnector):
+def _conn(handler, **kwargs) -> ReadwiseConnector:
+    """A connector whose HTTP goes to `handler`, through the supported seam."""
+    client = httpx.AsyncClient(
+        base_url="https://readwise.test", transport=httpx.MockTransport(handler)
+    )
+    return ReadwiseConnector("tok", client=client, **kwargs)
+
+
+def _list(**kwargs):
+    """List the 'later' location against MIXED, checking the request it sends."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/list/"
+        assert request.url.params["location"] == "later"
+        assert "category" not in request.url.params  # we fetch the whole location
+        return httpx.Response(200, json=MIXED)
+
+    conn = _conn(handler, **kwargs)
+
     async def run():
-        async def fake_get(path, params):
-            assert "category" not in params  # we fetch the whole location now
-            return MIXED
-        conn._get = fake_get
         try:
             return await conn.list_articles("later")
         finally:
@@ -43,14 +57,14 @@ def _list(conn: ReadwiseConnector):
 
 
 def test_default_categories_cover_all_content_types():
-    articles, cursor = _list(ReadwiseConnector("tok"))
+    articles, cursor = _list()
     # article, email, pdf, epub, tweet, video, podcast — all included
     assert {a.id for a in articles} == {"1", "2", "3", "4", "5", "6", "7"}
     assert cursor == "next123"  # pagination cursor passed through
 
 
 def test_categories_configurable():
-    articles, _ = _list(ReadwiseConnector("tok", categories=("article", "pdf")))
+    articles, _ = _list(categories=("article", "pdf"))
     assert {a.id for a in articles} == {"1", "3"}
 
 
@@ -59,17 +73,20 @@ def test_unloaded_podcast_stub_gives_load_transcript_message():
 
     from later_ink.connectors.base import ArticleUnavailable
 
-    conn = ReadwiseConnector("tok")
     stub = (
         "<div class='rw-podcast-description'>"
         "<a data-rw-button='load-podcast-transcript'>Load Transcript</a></div>"
     )
 
-    async def run():
-        async def fake_get(path, params):
-            return {"results": [{"id": "9", "title": "Pod", "html_content": stub}]}
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["id"] == "9"
+        return httpx.Response(
+            200, json={"results": [{"id": "9", "title": "Pod", "html_content": stub}]}
+        )
 
-        conn._get = fake_get
+    conn = _conn(handler)
+
+    async def run():
         try:
             return await conn.get_article_html("9")
         finally:
@@ -216,7 +233,7 @@ def test_books_are_listed_by_category_and_paginated():
 
 
 def test_categories_outside_the_configured_set_are_dropped():
-    articles, _ = _list(ReadwiseConnector("tok", categories=("article",)))
+    articles, _ = _list(categories=("article",))
     assert [a.category for a in articles] == ["article"]
 
 

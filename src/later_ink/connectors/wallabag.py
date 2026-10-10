@@ -101,10 +101,17 @@ class WallabagConnector(Connector):
             resp = await self._client.post("/oauth/v2/token", data=payload)
         except httpx.HTTPError as e:
             raise UpstreamError(f"Could not reach Wallabag: {type(e).__name__}") from e
-        if resp.status_code >= 400:
+        if resp.status_code in (400, 401):
+            # The token endpoint's refusals: OAuth2 answers a wrong password or a
+            # dead refresh token with 400 invalid_grant. _ensure_token reads these
+            # two statuses to fall back from refresh to password, so keep them.
             raise UpstreamError(
                 f"Wallabag rejected the credentials ({resp.status_code})", resp.status_code
             )
+        # Anything else is not about the credentials: a 429 is rate limiting and a
+        # 5xx is Wallabag failing. Calling those "rejected the credentials" sent
+        # people to check a password that was fine.
+        raise_for_upstream(resp, "Wallabag")
         try:
             data = resp.json()
             access_token = data["access_token"]

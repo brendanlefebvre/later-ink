@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from later_ink import config
-from later_ink.connectors.base import ArticleUnavailable
+from later_ink.connectors.base import ArticleUnavailable, UpstreamError
 from later_ink.connectors.wallabag import WallabagConnector, _article_from_entry
 
 ENTRIES_PAGE = {
@@ -291,3 +291,75 @@ def test_an_injected_client_is_used_instead_of_a_real_one():
 
     asyncio.run(run())
     assert "/api/entries.json" in seen
+
+
+def _token_status_conn(status: int):
+    """A connector whose token endpoint always answers `status`."""
+    def h(request):
+        if request.url.path == "/oauth/v2/token":
+            return httpx.Response(status, json={"error": "nope"})
+        return httpx.Response(200, json=ENTRIES_PAGE)
+
+    return _make_conn(h)
+
+
+def _login_error(status: int) -> UpstreamError:
+    conn = _token_status_conn(status)
+    with pytest.raises(UpstreamError) as exc:
+        _run(conn, lambda: conn.list_articles("unread"))
+    return exc.value
+
+
+def test_rate_limited_login_is_not_reported_as_bad_credentials():
+    err = _login_error(429)
+    assert err.status == 429
+    assert "rate-limiting" in str(err)
+    assert "rejected" not in str(err)
+
+
+@pytest.mark.parametrize("status", [500, 503])
+def test_failing_wallabag_login_is_not_reported_as_bad_credentials(status):
+    err = _login_error(status)
+    assert err.status == status
+    assert "rejected" not in str(err)
+
+
+@pytest.mark.parametrize("status", [400, 401])
+def test_refused_login_still_reads_as_rejected_credentials(status):
+    # OAuth2 answers a wrong password with 400 invalid_grant. _ensure_token also
+    # relies on these two statuses to decide a refresh token is dead and fall
+    # back to the password grant, so they must keep their status.
+    err = _login_error(status)
+    assert err.status == status
+    assert "rejected the credentials" in str(err)
+
+
+def test_transient_failure_on_refresh_is_raised_not_retried_as_password_login():
+    grants = []
+
+    def h(request):
+        if request.url.path == "/oauth/v2/token":
+            grant = dict(httpx.QueryParams(request.content.decode()))["grant_type"]
+            grants.append(grant)
+            if grant == "password":
+                # expires_in 0 makes the next request refresh straight away.
+                return httpx.Response(
+                    200, json={"access_token": "AT", "refresh_token": "RT", "expires_in": 0}
+                )
+            return httpx.Response(429, json={"error": "slow down"})
+        return httpx.Response(200, json=ENTRIES_PAGE)
+
+    conn = _make_conn(h)
+
+    async def go():
+        try:
+            await conn.list_articles("unread")
+            with pytest.raises(UpstreamError) as exc:
+                await conn.list_articles("unread")
+            return exc.value
+        finally:
+            await conn.close()
+
+    err = asyncio.run(go())
+    assert err.status == 429 and "rate-limiting" in str(err)
+    assert grants == ["password", "refresh_token"]  # no second password login
