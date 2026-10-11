@@ -1,3 +1,11 @@
+"""Unit tests for the Instapaper API v2 connector.
+
+Every test injects an httpx client with a MockTransport (the contract's seam)
+except test_build_client_sends_bearer_token_and_v2_base_url, which drives the
+client production builds. v1's live test found a bug no injected-client test
+could see, so that one test is the point.
+"""
+
 import asyncio
 import base64
 import json
@@ -8,57 +16,108 @@ import pytest
 
 from later_ink.connectors.base import ArticleUnavailable, UpstreamError
 from later_ink.connectors.instapaper import (
+    BASE_URL,
+    PAGE_SIZE,
     InstapaperConnector,
     _decode_article_id,
     _encode_article_id,
-    _OAuth1Auth,
-    _parse_error_envelope,
-    _raise_for_get_text_error,
-    _raise_for_json_error,
+    build_client,
 )
 
+BASE = "https://instapaper.test/api/2"
+TIME = 1735779845  # 2025-01-02T01:04:05Z
+BOOKMARK = {
+    "id": 42,
+    "url": "https://example.com/a",
+    "title": "Some Title",
+    "description": "An excerpt",
+    "image": "https://example.com/a.jpg",
+    "progress": {"percentage": 0.0, "timestamp": 0},
+    "liked": False,
+    "archived": False,
+    "time": TIME,
+    "pubtime": None,
+    "author": "A. Writer",
+    "folder_id": None,
+    "tags": [],
+    "private_source": None,
+    "category": 0,
+}
+PARSED = {
+    "metadata": {
+        "title": "Some Title From The Page",
+        "author": {"name": "Page Byline", "url": None},
+        "pubtime": None,
+        "thumbnail": None,
+        "description": None,
+        "private_source": None,
+        "category": 0,
+    },
+    "content": {
+        "body": "<article><p>Body</p></article>",
+        "images": [],
+        "words": 1,
+        "paywalled": False,
+        "direction": "ltr",
+    },
+}
 
-def test_oauth1_auth_signs_with_pinned_nonce_and_timestamp():
-    auth = _OAuth1Auth("ck", "cs", "ot", "ots")
-    # Pin nonce/timestamp so the signature is deterministic and we assert the
-    # real base-string construction, not merely "a header exists".
-    auth._client.nonce = "pinned-nonce"
-    auth._client.timestamp = "1700000000"
 
-    request = httpx.Request(
-        "POST",
-        "https://www.instapaper.com/api/1/bookmarks/list",
-        data={"folder_id": "unread", "limit": "500"},
-    )
-    flow = auth.auth_flow(request)
-    signed = next(flow)
+def _error(status: int, message: str = "nope") -> httpx.Response:
+    return httpx.Response(status, json={"error": {"code": status, "message": message}})
 
-    header = signed.headers["Authorization"]
-    assert header.startswith("OAuth ")
-    assert 'oauth_consumer_key="ck"' in header
-    assert 'oauth_token="ot"' in header
-    assert 'oauth_signature_method="HMAC-SHA1"' in header
-    assert 'oauth_nonce="pinned-nonce"' in header
-    assert 'oauth_timestamp="1700000000"' in header
-    # HMAC-SHA1 with key "cs&ots" over the RFC 5849 base string for this
-    # request, computed independently of oauthlib. Includes the form-body
-    # params, so a signer that dropped the body would produce a different value.
-    assert 'oauth_signature="J1PvH2e2f3l0p5xsvGoXO0qtidI%3D"' in header
+
+def _page(bookmarks: list, total: int) -> httpx.Response:
+    # Raw content, not json=: httpx 0.28 refuses to serialize the inf the
+    # unusable-time case needs, but a real upstream could send it.
+    body = json.dumps({"bookmarks": bookmarks, "total": total})
+    return httpx.Response(200, content=body, headers={"Content-Type": "application/json"})
+
+
+def _bookmarks(n: int, start: int = 1) -> list:
+    return [{**BOOKMARK, "id": i, "title": f"Title {i}"} for i in range(start, start + n)]
+
+
+def _conn(handler):
+    client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(handler))
+    return InstapaperConnector("tok", client=client), client
+
+
+def _run(conn, call):
+    async def go():
+        try:
+            return await call(conn)
+        finally:
+            await conn.close()
+
+    return asyncio.run(go())
+
+
+def _list(handler, folder_id="home", cursor=None):
+    conn, _ = _conn(handler)
+    return _run(conn, lambda c: c.list_articles(folder_id, cursor))
+
+
+# ---------------------------------------------------------------- article ids
 
 
 def test_article_id_round_trips():
-    token = _encode_article_id("42", 1735779845, "Some Title", "https://example.com/a")
-    assert _decode_article_id(token) == ("42", 1735779845, "Some Title", "https://example.com/a")
+    token = _encode_article_id("42", TIME, "Some Title", "https://example.com/a")
+    assert _decode_article_id(token) == ("42", TIME, "Some Title", "https://example.com/a")
 
 
 def test_article_id_round_trips_empty_url():
-    token = _encode_article_id("42", 1735779845, "Some Title", None)
-    assert _decode_article_id(token) == ("42", 1735779845, "Some Title", "")
+    token = _encode_article_id("42", TIME, "Some Title", None)
+    assert _decode_article_id(token) == ("42", TIME, "Some Title", "")
+
+
+def test_article_id_round_trips_missing_time():
+    token = _encode_article_id("42", None, "Some Title", None)
+    assert _decode_article_id(token) == ("42", None, "Some Title", "")
 
 
 def test_article_id_token_is_url_path_safe():
-    token = _encode_article_id("42", 1735779845, "Café — déjà vu", "https://example.com/a?x=1")
-    # base64url alphabet only (plus no padding); safe to drop into a URL path.
+    token = _encode_article_id("42", TIME, "Café, déjà vu", "https://example.com/a?x=1")
     assert all(c.isalnum() or c in "-_" for c in token)
 
 
@@ -75,311 +134,373 @@ def test_decode_rejects_wellformed_base64_missing_fields():
     assert exc.value.status == 404
 
 
-def test_parse_error_envelope_detects_list_and_bare_forms():
-    assert _parse_error_envelope('[{"type":"error","error_code":1241}]')["error_code"] == 1241
-    assert _parse_error_envelope('{"type":"error","error_code":1550}')["error_code"] == 1550
+# ------------------------------------------------------- production client
 
 
-def test_parse_error_envelope_returns_none_for_html_and_non_error_json():
-    assert _parse_error_envelope("<article><p>Body</p></article>") is None
-    assert _parse_error_envelope('[{"type":"bookmark","bookmark_id":1}]') is None
-
-
-def test_raise_for_json_error_maps_rate_limit_and_suspension():
-    with pytest.raises(UpstreamError) as e1:
-        _raise_for_json_error([{"type": "error", "error_code": 1040}])
-    assert e1.value.status == 429
-    with pytest.raises(UpstreamError) as e2:
-        _raise_for_json_error([{"type": "error", "error_code": 1042}])
-    assert e2.value.status == 403
-
-
-def test_raise_for_json_error_passes_clean_list():
-    assert _raise_for_json_error([{"type": "bookmark", "bookmark_id": 1}]) is None
-
-
-def test_raise_for_json_error_unknown_code_is_502():
-    with pytest.raises(UpstreamError) as e:
-        _raise_for_json_error([{"type": "error", "error_code": 1500}])
-    assert e.value.status == 502
-
-
-def test_raise_for_get_text_error_maps_codes():
-    with pytest.raises(ArticleUnavailable) as e_missing:
-        _raise_for_get_text_error({"type": "error", "error_code": 1241})
-    assert e_missing.value.status == 404
-
-    for code in (1041, 1220, 1221, 1550):
-        with pytest.raises(ArticleUnavailable) as e:
-            _raise_for_get_text_error({"type": "error", "error_code": code})
-        assert e.value.status == 422
-
-    with pytest.raises(UpstreamError) as e_rate:
-        _raise_for_get_text_error({"type": "error", "error_code": 1040})
-    assert e_rate.value.status == 429
-
-
-def test_raise_for_get_text_error_unknown_code_is_article_unavailable_422():
-    with pytest.raises(ArticleUnavailable) as e:
-        _raise_for_get_text_error({"type": "error", "error_code": 9999})
-    assert e.value.status == 422
-
-
-_BOOKMARK = {
-    "type": "bookmark",
-    "bookmark_id": 42,
-    "title": "Some Title",
-    "url": "https://example.com/a",
-    "description": "An excerpt",
-    "time": 1735779845,
-}
-
-
-def _conn(handler):
-    client = httpx.AsyncClient(
-        base_url="https://instapaper.test/api/1",
-        transport=httpx.MockTransport(handler),
-    )
-    return InstapaperConnector("ck", "cs", "ot", "ots", client=client), client
-
-
-def test_list_folders_has_builtins_then_custom():
-    def handler(request):
-        assert request.url.path.endswith("/folders/list")
-        return httpx.Response(200, json=[{"folder_id": 100, "title": "Recipes"}])
-
-    conn, client = _conn(handler)
-
-    async def go():
-        folders = await conn.list_folders()
-        await conn.close()
-        return folders
-
-    folders = asyncio.run(go())
-    assert [f.id for f in folders] == ["unread", "starred", "archive", "100"]
-    assert folders[-1].title == "Recipes"
-
-
-def test_list_articles_maps_bookmark_and_has_no_cursor():
-    def handler(request):
-        assert request.url.path.endswith("/bookmarks/list")
-        return httpx.Response(200, json=[{"type": "user", "user_id": 1}, _BOOKMARK])
-
-    conn, client = _conn(handler)
-
-    async def go():
-        result = await conn.list_articles("unread")
-        await conn.close()
-        return result
-
-    articles, cursor = asyncio.run(go())
-    assert cursor is None
-    assert len(articles) == 1
-    a = articles[0]
-    assert a.title == "Some Title"
-    assert a.url == "https://example.com/a"
-    assert a.summary == "An excerpt"
-    assert a.content_date == datetime(2025, 1, 2, 1, 4, 5)
-
-
-def test_list_articles_rejects_non_list_shape():
-    def handler(request):
-        return httpx.Response(200, json={"type": "error", "error_code": 1500})
-
-    conn, client = _conn(handler)
-
-    async def go():
-        try:
-            await conn.list_articles("unread")
-        finally:
-            await conn.close()
-
-    with pytest.raises(UpstreamError):
-        asyncio.run(go())
-
-
-def test_get_article_html_returns_html_and_reconstructs_metadata():
-    token = _encode_article_id("42", 1735779845, "Some Title", "https://example.com/a")
-
-    def handler(request):
-        assert request.url.path.endswith("/bookmarks/get_text")
-        return httpx.Response(200, text="<article><p>Body</p></article>")
-
-    conn, client = _conn(handler)
-
-    async def go():
-        result = await conn.get_article_html(token)
-        await conn.close()
-        return result
-
-    article, html = asyncio.run(go())
-    assert "<p>Body</p>" in html
-    assert article.title == "Some Title"
-    assert article.url == "https://example.com/a"
-    assert article.content_date == datetime(2025, 1, 2, 1, 4, 5)
-
-
-def test_get_article_html_maps_error_envelope_under_http_200():
-    token = _encode_article_id("42", 1735779845, "t", "u")
-
-    def handler(request):
-        # An error envelope arriving under HTTP 200 must still be treated as an error.
-        return httpx.Response(200, json=[{"type": "error", "error_code": 1241}])
-
-    conn, client = _conn(handler)
-
-    async def go():
-        try:
-            await conn.get_article_html(token)
-        finally:
-            await conn.close()
-
-    with pytest.raises(ArticleUnavailable) as e:
-        asyncio.run(go())
-    assert e.value.status == 404
-
-
-def test_article_id_round_trips_missing_time():
-    token = _encode_article_id("42", None, "t", "u")
-    assert _decode_article_id(token) == ("42", None, "t", "u")
-
-
-def _list_then_download(bookmark):
-    """List a folder holding `bookmark` and a good one, then download each by its
-    listed id — the two paths the determinism contract requires to agree."""
-
-    def handler(request):
-        if request.url.path.endswith("/bookmarks/list"):
-            return httpx.Response(200, json=[bookmark, _BOOKMARK])
-        return httpx.Response(200, text="<article><p>Body</p></article>")
-
-    conn, _client = _conn(handler)
-
-    async def go():
-        try:
-            listed, _ = await conn.list_articles("unread")
-            downloaded = [(await conn.get_article_html(a.id))[0] for a in listed]
-            return listed, downloaded
-        finally:
-            await conn.close()
-
-    return asyncio.run(go())
-
-
-@pytest.mark.parametrize(
-    "bad_time", [None, "", "not-an-int"], ids=["missing", "blank", "non-numeric"]
-)
-def test_unusable_time_gives_no_content_date_on_both_paths(bad_time):
-    bookmark = {"type": "bookmark", "bookmark_id": 7, "title": "t", "url": "u"}
-    if bad_time is not None:
-        bookmark["time"] = bad_time
-
-    listed, downloaded = _list_then_download(bookmark)
-
-    # One bad bookmark must not take the folder down: the good one still lists.
-    assert [a.title for a in listed] == ["t", "Some Title"]
-    # Unknown, not the epoch: list and download must agree on None.
-    assert listed[0].content_date is None
-    assert downloaded[0].content_date is None
-    # The good bookmark is unaffected on either path.
-    assert listed[1].content_date == downloaded[1].content_date == datetime(2025, 1, 2, 1, 4, 5)
-
-
-def _download_with(response: httpx.Response):
-    """Download one article against a get_text that answers with `response`."""
-    token = _encode_article_id("42", 1735779845, "Some Title", "https://example.com/a")
-    conn, _client = _conn(lambda request: response)
-
-    async def go():
-        try:
-            return await conn.get_article_html(token)
-        finally:
-            await conn.close()
-
-    return asyncio.run(go())
-
-
-def test_get_text_bare_400_is_an_unavailable_article():
-    # Live, get_text's 400s carry an error envelope (1241, 1550). A 400 that
-    # arrives without one is still about the article, not the service, so the
-    # reader gets a readable reason rather than a generic upstream error.
-    with pytest.raises(ArticleUnavailable) as e:
-        _download_with(httpx.Response(400, text="Bad Request"))
-    assert e.value.status == 422
-
-
-@pytest.mark.parametrize("status", [401, 429, 500, 503])
-def test_get_text_bare_service_failures_stay_upstream_errors(status):
-    # A rejected token or a failing service must not be reported as a bad article.
-    with pytest.raises(UpstreamError) as e:
-        _download_with(httpx.Response(status, text=""))
-    assert e.value.status == status
-
-
-def test_get_text_redirect_is_not_accepted_as_the_article():
-    # httpx doesn't follow redirects, so without a 2xx check a redirect's body
-    # (a sign-in or interstitial page) would be turned into the EPUB.
-    with pytest.raises(UpstreamError):
-        _download_with(
-            httpx.Response(
-                302,
-                headers={"Location": "http://portal.example/login"},
-                text="<html><body>Please sign in to the Wi-Fi</body></html>",
-            )
-        )
-
-
-def test_list_redirect_is_not_accepted_as_a_listing():
-    def handler(request):
-        return httpx.Response(302, headers={"Location": "http://elsewhere.example/"}, json=[_BOOKMARK])
-
-    conn, _client = _conn(handler)
-
-    async def go():
-        try:
-            await conn.list_articles("unread")
-        finally:
-            await conn.close()
-
-    with pytest.raises(UpstreamError):
-        asyncio.run(go())
-
-
-def test_oauth1_auth_signs_a_request_with_no_body():
-    # folders/list takes no parameters, so its POST has an empty body. Passing a
-    # form Content-Type for an empty body made oauthlib raise ValueError, which
-    # escaped as a 500 on the whole Instapaper catalog.
-    auth = _OAuth1Auth("ck", "cs", "ot", "ots")
-    request = httpx.Request("POST", "https://www.instapaper.com/api/1/folders/list", data={})
-    signed = next(auth.auth_flow(request))
-    assert signed.headers["Authorization"].startswith("OAuth ")
-
-
-def test_signed_client_drives_list_folders_and_list_articles():
-    # Every other test injects an unsigned client, so the signer never sees the
-    # connector's real requests. This one keeps the signer on the injected client.
+def test_build_client_sends_bearer_token_and_v2_base_url():
     seen = []
 
     def handler(request):
-        seen.append((request.url.path, request.headers.get("Authorization", "")))
-        if request.url.path.endswith("/folders/list"):
-            return httpx.Response(200, json=[])
-        return httpx.Response(200, json=[_BOOKMARK])
+        seen.append(request)
+        return httpx.Response(200, json={"folders": []})
 
-    client = httpx.AsyncClient(
-        base_url="https://instapaper.test/api/1",
-        transport=httpx.MockTransport(handler),
-        auth=_OAuth1Auth("ck", "cs", "ot", "ots"),
-    )
-    conn = InstapaperConnector("ck", "cs", "ot", "ots", client=client)
+    client = build_client("tok", transport=httpx.MockTransport(handler))
+    conn = InstapaperConnector("tok", client=client)
+    _run(conn, lambda c: c.list_folders())
 
-    async def go():
-        try:
-            await conn.list_folders()
-            await conn.list_articles("unread")
-        finally:
-            await conn.close()
+    assert len(seen) == 1
+    req = seen[0]
+    assert str(req.url) == f"{BASE_URL}/folders"
+    assert req.headers["Authorization"] == "Bearer tok"
+    assert req.headers["Accept"] == "application/json"
 
-    asyncio.run(go())
-    assert [p.rsplit("/", 1)[-1] for p, _ in seen] == ["list", "list"]
-    assert all(h.startswith("OAuth ") for _, h in seen)
+
+def test_default_client_is_the_production_client():
+    conn = InstapaperConnector("tok")
+    try:
+        assert str(conn._client.base_url).rstrip("/") == BASE_URL
+        assert conn._client.headers["Authorization"] == "Bearer tok"
+    finally:
+        asyncio.run(conn.close())
+
+
+# ---------------------------------------------------------------- folders
+
+
+def test_list_folders_has_builtins_then_user_folders_in_api_order():
+    def handler(request):
+        assert request.url.path == "/api/2/folders"
+        return httpx.Response(
+            200,
+            json={
+                "folders": [
+                    {"id": 200, "title": "Travel", "slug": "travel", "position": 1, "public": False, "count": 3},
+                    {"id": 100, "title": "Recipes", "slug": "recipes", "position": 2, "public": False, "count": 9},
+                ]
+            },
+        )
+
+    conn, _ = _conn(handler)
+    folders = _run(conn, lambda c: c.list_folders())
+    assert [f.id for f in folders] == ["home", "liked", "archive", "200", "100"]
+    assert [f.title for f in folders[3:]] == ["Travel", "Recipes"]
+
+
+def test_list_folders_tolerates_missing_title_and_odd_entries():
+    def handler(request):
+        return httpx.Response(200, json={"folders": [{"id": 5}, "junk", {"title": "no id"}]})
+
+    conn, _ = _conn(handler)
+    folders = _run(conn, lambda c: c.list_folders())
+    assert [f.id for f in folders[3:]] == ["5"]
+    assert folders[3].title == "5"
+
+
+def test_list_folders_rejects_a_non_object_body():
+    conn, _ = _conn(lambda request: httpx.Response(200, json=[{"id": 5}]))
+    with pytest.raises(UpstreamError):
+        _run(conn, lambda c: c.list_folders())
+
+
+# ------------------------------------------------------- query construction
+
+
+def test_builtin_folder_sends_section_and_never_since():
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.url.params))
+        return _page([BOOKMARK], 1)
+
+    _list(handler, "archive")
+    assert seen == [{"section": "archive", "limit": str(PAGE_SIZE), "offset": "0"}]
+
+
+def test_user_folder_sends_folder_id_without_section():
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.url.params))
+        return _page([BOOKMARK], 1)
+
+    _list(handler, "100")
+    assert seen == [{"folder_id": "100", "limit": str(PAGE_SIZE), "offset": "0"}]
+
+
+# ---------------------------------------------------------- article mapping
+
+
+def test_list_articles_maps_bookmark_fields():
+    articles, cursor = _list(lambda request: _page([BOOKMARK], 1))
+    assert cursor is None
+    (a,) = articles
+    assert _decode_article_id(a.id) == ("42", TIME, "Some Title", "https://example.com/a")
+    assert a.title == "Some Title"
+    assert a.author == "A. Writer"
+    assert a.summary == "An excerpt"
+    assert a.url == "https://example.com/a"
+    assert a.image_url == "https://example.com/a.jpg"
+    assert a.category == "article"
+    assert a.content_date == datetime(2025, 1, 2, 1, 4, 5)
+    assert a.content_date.tzinfo is None
+    assert a.word_count is None
+
+
+@pytest.mark.parametrize("raw,expected", [(1, "email"), (2, "video"), (3, "pdf"), (4, "social"), (9, "article"), (None, "article"), ("x", "article")])
+def test_category_maps_known_codes_and_defaults_to_article(raw, expected):
+    articles, _ = _list(lambda request: _page([{**BOOKMARK, "category": raw}], 1))
+    assert articles[0].category == expected
+
+
+def test_private_bookmark_with_null_title_and_url_lists_as_untitled():
+    bm = {**BOOKMARK, "title": None, "url": None, "private_source": "Acme Reader"}
+    articles, _ = _list(lambda request: _page([bm], 1))
+    (a,) = articles
+    assert a.title == "Untitled"
+    assert a.url is None
+    assert _decode_article_id(a.id) == ("42", TIME, "Untitled", "")
+
+
+@pytest.mark.parametrize("bad_time", [None, "soon", "", 1.5e400])
+def test_unusable_time_gives_no_content_date(bad_time):
+    articles, _ = _list(lambda request: _page([{**BOOKMARK, "time": bad_time}], 1))
+    assert articles[0].content_date is None
+    assert _decode_article_id(articles[0].id)[1] is None
+
+
+def test_non_dict_and_idless_entries_are_skipped():
+    articles, _ = _list(lambda request: _page(["junk", {"title": "no id"}, BOOKMARK], 3))
+    assert [a.title for a in articles] == ["Some Title"]
+
+
+def test_bookmarks_that_is_not_a_list_is_an_upstream_error():
+    with pytest.raises(UpstreamError):
+        _list(lambda request: httpx.Response(200, json={"bookmarks": {"id": 1}, "total": 1}))
+
+
+# ------------------------------------------------------------------ paging
+
+
+def test_full_page_with_more_to_come_yields_the_next_offset():
+    _, cursor = _list(lambda request: _page(_bookmarks(PAGE_SIZE), 250))
+    assert cursor == str(PAGE_SIZE)
+
+
+def test_cursor_is_sent_as_offset_and_advances():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.params["offset"])
+        return _page(_bookmarks(PAGE_SIZE, start=101), 250)
+
+    _, cursor = _list(handler, cursor="100")
+    assert seen == ["100"]
+    assert cursor == "200"
+
+
+def test_short_page_ends_the_feed_even_if_total_says_more():
+    _, cursor = _list(lambda request: _page(_bookmarks(3), 999))
+    assert cursor is None
+
+
+def test_full_page_that_reaches_total_ends_the_feed():
+    _, cursor = _list(lambda request: _page(_bookmarks(PAGE_SIZE), PAGE_SIZE))
+    assert cursor is None
+
+
+@pytest.mark.parametrize("total", [None, "many", -1])
+def test_full_page_with_unusable_total_continues(total):
+    _, cursor = _list(lambda request: httpx.Response(200, json={"bookmarks": _bookmarks(PAGE_SIZE), "total": total}))
+    assert cursor == str(PAGE_SIZE)
+
+
+@pytest.mark.parametrize("cursor", ["", "abc", "-5", "1.5"])
+def test_unusable_cursor_restarts_at_offset_zero(cursor):
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.params["offset"])
+        return _page([BOOKMARK], 1)
+
+    _list(handler, cursor=cursor)
+    assert seen == ["0"]
+
+
+def test_next_cursor_counts_raw_entries_not_kept_articles():
+    # A page of PAGE_SIZE raw entries where some are junk is still a full page.
+    raw = _bookmarks(PAGE_SIZE - 1) + ["junk"]
+    articles, cursor = _list(lambda request: _page(raw, 500))
+    assert len(articles) == PAGE_SIZE - 1
+    assert cursor == str(PAGE_SIZE)
+
+
+# ------------------------------------------------------------ status mapping
+
+
+@pytest.mark.parametrize(
+    "response,status",
+    [
+        (httpx.Response(401, text=""), 401),
+        (_error(401), 401),
+        (_error(402), 402),
+        (_error(403), 403),
+        (_error(404), 404),
+        (_error(500), 500),
+        (httpx.Response(500, text="<html>broken</html>"), 500),
+        (httpx.Response(302, headers={"Location": "https://www.instapaper.com/login"}), 502),
+    ],
+)
+def test_error_statuses_are_upstream_errors_with_the_status(response, status):
+    with pytest.raises(UpstreamError) as exc:
+        _list(lambda request: response)
+    assert exc.value.status == status
+
+
+def test_402_and_403_have_their_own_messages():
+    with pytest.raises(UpstreamError) as exc:
+        _list(lambda request: _error(402))
+    assert "quota" in str(exc.value)
+    with pytest.raises(UpstreamError) as exc:
+        _list(lambda request: _error(403))
+    assert "registered" in str(exc.value)
+
+
+def test_error_message_text_is_not_surfaced_or_matched():
+    with pytest.raises(UpstreamError) as exc:
+        _list(lambda request: _error(500, "Bookmark not found"))
+    assert "Bookmark not found" not in str(exc.value)
+
+
+def test_429_is_retried_once_then_raised():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": {"code": 429, "message": "slow down"}})
+
+    with pytest.raises(UpstreamError) as exc:
+        _list(handler)
+    assert exc.value.status == 429
+    assert len(calls) == 2
+
+
+def test_429_then_200_succeeds():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return _page([BOOKMARK], 1)
+
+    articles, _ = _list(handler)
+    assert len(articles) == 1 and len(calls) == 2
+
+
+def test_non_json_200_is_an_upstream_error():
+    with pytest.raises(UpstreamError):
+        _list(lambda request: httpx.Response(200, text="<html>captive portal</html>"))
+
+
+def test_unreachable_host_is_an_upstream_error():
+    def handler(request):
+        raise httpx.ConnectError("no route to host")
+
+    with pytest.raises(UpstreamError):
+        _list(handler)
+
+
+# ------------------------------------------------- download (Task 3 makes these pass)
+
+
+ARTICLE_ID = _encode_article_id("42", TIME, "Some Title", "https://example.com/a")
+
+
+def _download(handler, article_id=ARTICLE_ID):
+    conn, _ = _conn(handler)
+    return _run(conn, lambda c: c.get_article_html(article_id))
+
+
+def test_download_calls_parse_with_no_parameters():
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=PARSED)
+
+    _download(handler)
+    assert seen == [("GET", "/api/2/bookmarks/42/parse", {})]
+
+
+def test_download_returns_body_and_metadata_from_the_id_not_the_parser():
+    article, html = _download(lambda request: httpx.Response(200, json=PARSED))
+    assert html == "<article><p>Body</p></article>"
+    assert article.id == ARTICLE_ID
+    assert article.title == "Some Title"  # the bookmark's title, not "Some Title From The Page"
+    assert article.url == "https://example.com/a"
+    assert article.author == "Page Byline"
+    assert article.content_date == datetime(2025, 1, 2, 1, 4, 5)
+    assert article.content_date.tzinfo is None
+
+
+def test_download_with_empty_url_in_id_has_no_url():
+    article, _ = _download(lambda request: httpx.Response(200, json=PARSED), _encode_article_id("42", TIME, "T", None))
+    assert article.url is None
+
+
+def test_download_without_parser_author_has_none():
+    payload = {**PARSED, "metadata": {**PARSED["metadata"], "author": None}}
+    article, _ = _download(lambda request: httpx.Response(200, json=payload))
+    assert article.author is None
+
+
+def test_parse_400_is_an_unavailable_article_422():
+    with pytest.raises(ArticleUnavailable) as exc:
+        _download(lambda request: _error(400, "Bookmark not found"))
+    assert exc.value.status == 422
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {**PARSED, "content": {**PARSED["content"], "body": None}},
+        {**PARSED, "content": {**PARSED["content"], "body": "   \n"}},
+        {"metadata": PARSED["metadata"]},
+        {"metadata": PARSED["metadata"], "content": "not an object"},
+    ],
+)
+def test_parse_200_without_a_body_is_an_unavailable_article_422(payload):
+    with pytest.raises(ArticleUnavailable) as exc:
+        _download(lambda request: httpx.Response(200, json=payload))
+    assert exc.value.status == 422
+
+
+@pytest.mark.parametrize("response,status", [(_error(402), 402), (_error(403), 403), (_error(500), 500), (httpx.Response(302), 502)])
+def test_parse_service_failures_stay_upstream_errors(response, status):
+    with pytest.raises(UpstreamError) as exc:
+        _download(lambda request: response)
+    assert exc.value.status == status
+
+
+def test_parse_non_object_json_is_an_upstream_error():
+    with pytest.raises(UpstreamError):
+        _download(lambda request: httpx.Response(200, json=["<p>body</p>"]))
+
+
+def test_forged_non_numeric_bookmark_id_is_rejected_before_any_request():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json=PARSED)
+
+    with pytest.raises(ArticleUnavailable) as exc:
+        _download(handler, _encode_article_id("../me", TIME, "T", None))
+    assert exc.value.status == 404
+    assert calls == []
+
+
+def test_list_then_download_agree_on_content_date():
+    articles, _ = _list(lambda request: _page([BOOKMARK], 1))
+    article, _ = _download(lambda request: httpx.Response(200, json=PARSED), articles[0].id)
+    assert article.content_date == articles[0].content_date == datetime(2025, 1, 2, 1, 4, 5)

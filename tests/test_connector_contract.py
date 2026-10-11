@@ -148,7 +148,7 @@ def _build_wallabag(handler: Callable) -> tuple[Connector, httpx.AsyncClient]:
     return connector, client
 
 
-FOLDER_ID_INSTAPAPER = "unread"
+FOLDER_ID_INSTAPAPER = "home"
 # time 1735779845 == CONTENT_DATE_UTC (2025-01-02T01:04:05Z), so both the list
 # and download paths land on the same determinism assertion.
 _INSTAPAPER_TIME = 1735779845
@@ -157,42 +157,68 @@ ARTICLE_ID_INSTAPAPER = _encode_article_id("42", _INSTAPAPER_TIME, "Some Title",
 
 def _build_instapaper(handler: Callable) -> tuple[Connector, httpx.AsyncClient]:
     client = httpx.AsyncClient(
-        base_url="https://instapaper.test/api/1",
+        base_url="https://instapaper.test/api/2",
         transport=httpx.MockTransport(handler),
     )
-    connector = InstapaperConnector("ck", "cs", "ot", "ots", client=client)
+    connector = InstapaperConnector("tok", client=client)
     return connector, client
 
 
 def _instapaper_handler(scenario: str) -> Callable:
     bookmark = {
-        "type": "bookmark",
-        "bookmark_id": 42,
-        "title": "Some Title",
+        "id": 42,
         "url": "https://ex.com/a",
+        "title": "Some Title",
         "description": "An excerpt",
+        "image": None,
+        "progress": {"percentage": 0.0, "timestamp": 0},
+        "liked": False,
+        "archived": False,
         "time": _INSTAPAPER_TIME,
+        "pubtime": None,
+        "author": None,
+        "folder_id": None,
+        "tags": [],
+        "private_source": None,
+        "category": 0,
     }
+
+    def error(status: int, message: str) -> httpx.Response:
+        return httpx.Response(status, json={"error": {"code": status, "message": message}})
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if scenario == "unreachable":
             raise httpx.ConnectError("boom")
         if scenario == "error_500":
-            return httpx.Response(500, text="upstream is broken")
+            return error(500, "Unexpected error")
         if scenario == "unauthorized":
+            # A bad token can come back with an empty body (SDK docs).
             return httpx.Response(401, text="")
-        if scenario == "non_json" and path.endswith("/bookmarks/list"):
+        if scenario == "non_json" and path.endswith("/bookmarks"):
             return httpx.Response(200, text="<html>not json</html>")
-        if path.endswith("/folders/list"):
-            return httpx.Response(200, json=[{"folder_id": 100, "title": "Recipes"}])
-        if path.endswith("/bookmarks/list"):
-            return httpx.Response(200, json=[{"type": "user", "user_id": 1}, bookmark])
-        if path.endswith("/bookmarks/get_text"):
+        if path.endswith("/folders"):
+            return httpx.Response(
+                200,
+                json={"folders": [{"id": 100, "title": "Recipes", "slug": "recipes", "position": 1, "public": False, "count": 1}]},
+            )
+        if path.endswith("/tags"):
+            return httpx.Response(
+                200, json={"tags": [{"id": 7, "name": "Cooking", "slug": "cooking", "count": 1}]}
+            )
+        if path.endswith("/parse"):
             if scenario == "missing":
-                return httpx.Response(400, json=[{"type": "error", "error_code": 1241}])
-            return httpx.Response(200, text="<article><p>Body</p></article>")
-        return httpx.Response(200, json=[])
+                return error(400, "Bookmark not found")
+            return httpx.Response(
+                200,
+                json={
+                    "metadata": {"title": "Some Title", "author": {"name": "A. Writer", "url": None}, "pubtime": None, "thumbnail": None, "description": None, "private_source": None, "category": 0},
+                    "content": {"body": "<article><p>Body</p></article>", "images": [], "words": 1, "paywalled": False, "direction": "ltr"},
+                },
+            )
+        if path.endswith("/bookmarks"):
+            return httpx.Response(200, json={"bookmarks": [bookmark], "total": 1})
+        return error(404, "Not found")
 
     return handler
 
