@@ -37,6 +37,14 @@ PAGE_SIZE = 100
 # the spec says more may be added and to treat them that way.
 _CATEGORIES = {0: "article", 1: "email", 2: "video", 3: "pdf", 4: "social"}
 
+# Tags are catalog "views", not folders: a tagged bookmark may sit in Home or
+# Archive, which is what Connector.list_views describes, and it keeps the
+# base search() scan over list_folders() from reading each bookmark twice.
+# The view id carries the tag's numeric id, not its name: folder hrefs are
+# built without URL-encoding, names may contain anything, and the id survives
+# a rename. The prefix cannot collide with a section name or a decimal folder id.
+_TAG_VIEW_PREFIX = "tag-"
+
 
 def build_client(
     access_token: str, *, transport: httpx.AsyncBaseTransport | None = None
@@ -261,6 +269,42 @@ class InstapaperConnector(Connector):
         else:
             params = {"folder_id": folder_id}
         return await self._page("bookmarks", params, cursor)
+
+    async def _tags(self) -> list[dict]:
+        data = await self._get_object("tags")
+        entries = data.get("tags")
+        return [
+            t for t in (entries if isinstance(entries, list) else [])
+            if isinstance(t, dict) and "id" in t
+        ]
+
+    async def list_views(self) -> list[Folder]:
+        views = []
+        for t in await self._tags():
+            name = str(t.get("name") or t["id"])
+            views.append(Folder(f"{_TAG_VIEW_PREFIX}{t['id']}", name, f"Bookmarks tagged {name}"))
+        return views
+
+    async def list_view_articles(
+        self, view_id: str, cursor: str | None = None
+    ) -> tuple[list[Article], str | None]:
+        if not view_id.startswith(_TAG_VIEW_PREFIX):
+            raise KeyError(view_id)
+        raw = view_id[len(_TAG_VIEW_PREFIX):]
+        # ASCII only: int() rejects some non-ASCII digits that isdigit() accepts.
+        if not (raw.isascii() and raw.isdecimal()):
+            raise KeyError(view_id)
+        tag_id = int(raw)
+        # One lookup per page: the list endpoint takes the tag's name, and the
+        # id is what the view carries. A name cache is the first thing to add
+        # if this shows up in live use.
+        name = next((str(t.get("name") or t["id"]) for t in await self._tags() if t["id"] == tag_id), None)
+        if name is None:
+            # Deleted between the navigation feed and this request. An empty
+            # page, not an error: the catalog will drop it on its next refresh.
+            return [], None
+        # `tag` on its own implies section=tag; never send `section` with it.
+        return await self._page("bookmarks", {"tag": name}, cursor)
 
     async def get_article_html(self, article_id: str) -> tuple[Article, str]:
         bookmark_id, time, title, url = _decode_article_id(article_id)

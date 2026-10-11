@@ -517,3 +517,98 @@ def test_list_then_download_agree_on_content_date():
     articles, _ = _list(lambda request: _page([BOOKMARK], 1))
     article, _ = _download(lambda request: httpx.Response(200, json=PARSED), articles[0].id)
     assert article.content_date == articles[0].content_date == datetime(2025, 1, 2, 1, 4, 5)
+
+
+# -------------------------------------------------------------------- tags
+
+
+TAGS = {
+    "tags": [
+        {"id": 7, "name": "Cooking", "slug": "cooking", "count": 3},
+        {"id": 9, "name": "long reads été", "slug": "long-reads-ete", "count": 0},
+    ]
+}
+
+
+def test_list_views_maps_tags_to_prefixed_ids_in_api_order():
+    def handler(request):
+        assert request.url.path == "/api/2/tags"
+        return httpx.Response(200, json=TAGS)
+
+    conn, _ = _conn(handler)
+    views = _run(conn, lambda c: c.list_views())
+    assert [(v.id, v.title) for v in views] == [("tag-7", "Cooking"), ("tag-9", "long reads été")]
+    assert views[0].description == "Bookmarks tagged Cooking"
+
+
+def test_list_views_skips_odd_entries_and_uses_id_for_a_missing_name():
+    conn, _ = _conn(lambda request: httpx.Response(200, json={"tags": [{"id": 3}, "junk", {"name": "no id"}]}))
+    views = _run(conn, lambda c: c.list_views())
+    assert [(v.id, v.title) for v in views] == [("tag-3", "3")]
+
+
+def test_view_ids_never_collide_with_folder_ids():
+    def handler(request):
+        if request.url.path.endswith("/tags"):
+            return httpx.Response(200, json={"tags": [{"id": 100, "name": "Recipes", "slug": "r", "count": 1}]})
+        return httpx.Response(200, json={"folders": [{"id": 100, "title": "Recipes"}]})
+
+    conn, _ = _conn(handler)
+    folders, views = _run(conn, lambda c: asyncio.gather(c.list_folders(), c.list_views()))
+    assert {f.id for f in folders}.isdisjoint({v.id for v in views})
+
+
+def test_tag_view_sends_the_tag_name_only_and_pages():
+    seen = []
+
+    def handler(request):
+        if request.url.path.endswith("/tags"):
+            return httpx.Response(200, json=TAGS)
+        seen.append(dict(request.url.params))
+        return _page(_bookmarks(PAGE_SIZE), 150)
+
+    conn, _ = _conn(handler)
+    articles, cursor = _run(conn, lambda c: c.list_view_articles("tag-9", None))
+    assert seen == [{"tag": "long reads été", "limit": str(PAGE_SIZE), "offset": "0"}]
+    assert len(articles) == PAGE_SIZE
+    assert cursor == str(PAGE_SIZE)
+
+
+def test_tag_view_cursor_is_passed_as_offset():
+    seen = []
+
+    def handler(request):
+        if request.url.path.endswith("/tags"):
+            return httpx.Response(200, json=TAGS)
+        seen.append(request.url.params["offset"])
+        return _page(_bookmarks(2), 102)
+
+    conn, _ = _conn(handler)
+    _, cursor = _run(conn, lambda c: c.list_view_articles("tag-7", "100"))
+    assert seen == ["100"]
+    assert cursor is None
+
+
+def test_deleted_tag_returns_an_empty_page():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json=TAGS)
+
+    conn, _ = _conn(handler)
+    assert _run(conn, lambda c: c.list_view_articles("tag-404", None)) == ([], None)
+    assert calls == ["/api/2/tags"]
+
+
+@pytest.mark.parametrize("view_id", ["short-reads", "tag-", "tag-x", "tag-7x", "tag-²7", "7"])
+def test_unknown_view_ids_raise_key_error(view_id):
+    conn, _ = _conn(lambda request: httpx.Response(200, json=TAGS))
+    with pytest.raises(KeyError):
+        _run(conn, lambda c: c.list_view_articles(view_id, None))
+
+
+def test_tag_list_failure_is_an_upstream_error():
+    conn, _ = _conn(lambda request: _error(500))
+    with pytest.raises(UpstreamError):
+        _run(conn, lambda c: c.list_views())
