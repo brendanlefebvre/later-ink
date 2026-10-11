@@ -492,9 +492,9 @@ def landing(payment_link: str | None, free_signup: bool, base_url: str) -> str:
 </details>
 <details>
   <summary>Other read-later services?</summary>
-  <div class="answer">Wallabag works today, alongside Readwise Reader. The connector
-    interface is three methods, so more are easy to add; Instapaper is on the roadmap,
-    and contributions are welcome on <a class="inline" href="{REPO_URL}">GitHub</a>.</div>
+  <div class="answer">Wallabag and Instapaper work today, alongside Readwise Reader. The
+    connector interface is three methods, so more are easy to add, and contributions are
+    welcome on <a class="inline" href="{REPO_URL}">GitHub</a>.</div>
 </details>
 """,
         head_extra=og_tags,
