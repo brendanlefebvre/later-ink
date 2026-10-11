@@ -334,6 +334,10 @@ class InstapaperConnector(Connector):
         metadata = payload.get("metadata")
         author = metadata.get("author") if isinstance(metadata, dict) else None
         author_name = author.get("name") if isinstance(author, dict) else None
+        # The lead image feeds the EPUB cover, the same as Readwise's image_url
+        # and Wallabag's preview_picture. It is fetched at build time under the
+        # same guards as body images, so it adds no new kind of variance.
+        thumbnail = metadata.get("thumbnail") if isinstance(metadata, dict) else None
         # Title, URL and date come from the id, not the parser: the bookmark's
         # title is the one the user sees and may have edited, and the date
         # must not depend on what the parser returns today.
@@ -342,6 +346,7 @@ class InstapaperConnector(Connector):
             title=title,
             url=url or None,
             author=author_name or None,
+            image_url=thumbnail if isinstance(thumbnail, str) and thumbnail else None,
             content_date=parse_epoch(time),
         )
         return article, body

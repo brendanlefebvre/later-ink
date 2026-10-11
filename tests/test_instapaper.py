@@ -466,6 +466,19 @@ def test_download_without_parser_author_has_none():
     assert article.author is None
 
 
+def test_download_takes_the_cover_image_from_the_parser_thumbnail():
+    payload = {**PARSED, "metadata": {**PARSED["metadata"], "thumbnail": "https://example.com/lead.jpg"}}
+    article, _ = _download(lambda request: httpx.Response(200, json=payload))
+    assert article.image_url == "https://example.com/lead.jpg"
+
+
+@pytest.mark.parametrize("thumbnail", [None, "", 7, {"url": "https://example.com/x.jpg"}])
+def test_download_without_a_usable_thumbnail_has_no_cover_image(thumbnail):
+    payload = {**PARSED, "metadata": {**PARSED["metadata"], "thumbnail": thumbnail}}
+    article, _ = _download(lambda request: httpx.Response(200, json=payload))
+    assert article.image_url is None
+
+
 def test_parse_400_is_an_unavailable_article_422():
     with pytest.raises(ArticleUnavailable) as exc:
         _download(lambda request: _error(400, "Bookmark not found"))
