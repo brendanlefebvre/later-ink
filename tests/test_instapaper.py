@@ -410,7 +410,7 @@ def test_unreachable_host_is_an_upstream_error():
         _list(handler)
 
 
-# ------------------------------------------------- download (Task 3 makes these pass)
+# ---------------------------------------------------------------- download
 
 
 ARTICLE_ID = _encode_article_id("42", TIME, "Some Title", "https://example.com/a")
