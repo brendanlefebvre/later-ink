@@ -161,22 +161,16 @@ def get_wallabag_config() -> dict[str, str] | None:
 
 
 def get_instapaper_config() -> dict[str, str] | None:
-    """Self-host Instapaper connector settings, or None if not fully configured.
+    """Self-host Instapaper connector settings, or None if not configured.
 
-    Instapaper's Full API needs an OAuth1 consumer key/secret plus a token pair
-    minted once with `python -m later_ink.instapaper_auth`. All four must be
-    present to enable the connector.
+    API v2 needs one personal access token, generated on the application's
+    page at instapaper.com/developers/applications by the account it will
+    read. Blank after trimming counts as unset, as for the other connectors.
     """
-    keys = {
-        "consumer_key": "INSTAPAPER_CONSUMER_KEY",
-        "consumer_secret": "INSTAPAPER_CONSUMER_SECRET",
-        "oauth_token": "INSTAPAPER_OAUTH_TOKEN",
-        "oauth_token_secret": "INSTAPAPER_OAUTH_TOKEN_SECRET",
-    }
-    values = {k: os.environ.get(env, "").strip() for k, env in keys.items()}
-    if not all(values.values()):
+    token = os.environ.get("INSTAPAPER_ACCESS_TOKEN", "").strip()
+    if not token:
         return None
-    return values
+    return {"access_token": token}
 
 
 def get_readwise_categories() -> tuple[str, ...]:

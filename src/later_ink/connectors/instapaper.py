@@ -3,7 +3,6 @@ import base64
 import json
 
 import httpx
-import oauthlib.oauth1  # NB: `import oauthlib` alone does not expose the oauth1 submodule
 
 from .base import (
     Article,
@@ -17,32 +16,62 @@ from .base import (
     retry_after_seconds,
 )
 
-BASE_URL = "https://www.instapaper.com/api/1"
+BASE_URL = "https://www.instapaper.com/api/2"
 
-# Instapaper's three implicit locations. folders/list returns only user-created
-# folders; these are always present and lead the list.
+# Instapaper's three implicit locations are list "sections" in API v2, not
+# folders: GET /folders returns only user-created ones. Their ids here are
+# the exact `section` values the API takes, so list_articles can pass them
+# straight through. v1's "unread" and "starred" names are gone.
 BUILTIN_FOLDERS = [
-    Folder("unread", "Unread", "Bookmarks you haven't archived"),
-    Folder("starred", "Starred", "Bookmarks you've starred"),
+    Folder("home", "Home", "Bookmarks you haven't archived"),
+    Folder("liked", "Liked", "Bookmarks you've liked"),
     Folder("archive", "Archive", "Bookmarks you've archived"),
 ]
+_BUILTIN_IDS = frozenset(f.id for f in BUILTIN_FOLDERS)
 
-# The most we ask for per folder: the API's documented maximum. There is no
-# forward pagination (the `have` parameter is delta-sync, not a cursor), so
-# whatever comes back is the whole reachable window. Observed live
-# (2026-10-10), Archive returns at most 200 whatever the limit; other folders
-# honor up to 500.
-_LIST_LIMIT = "500"
+# Bookmarks per request. The API allows up to 500; 100 keeps one OPDS page
+# proportionate to an e-ink screen and to the scan bounds in base.py.
+PAGE_SIZE = 100
+
+# Bookmark.category codes, per the OpenAPI spec. Unknown codes are articles:
+# the spec says more may be added and to treat them that way.
+_CATEGORIES = {0: "article", 1: "email", 2: "video", 3: "pdf", 4: "social"}
+
+# Tags are catalog "views", not folders: a tagged bookmark may sit in Home or
+# Archive, which is what Connector.list_views describes, and it keeps the
+# base search() scan over list_folders() from reading each bookmark twice.
+# The view id carries the tag's numeric id, not its name: folder hrefs are
+# built without URL-encoding, names may contain anything, and the id survives
+# a rename. The prefix cannot collide with a section name or a decimal folder id.
+_TAG_VIEW_PREFIX = "tag-"
+
+
+def build_client(
+    access_token: str, *, transport: httpx.AsyncBaseTransport | None = None
+) -> httpx.AsyncClient:
+    """The client production uses.
+
+    `transport` exists so one test can drive the real headers and base URL
+    through a MockTransport. v1's unit tests all injected a bare client, and
+    the bug that broke the live catalog lived in the part they never ran.
+    """
+    return httpx.AsyncClient(
+        base_url=BASE_URL,
+        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+        timeout=30.0,
+        transport=transport,
+    )
 
 
 def _encode_article_id(bookmark_id: str, time: int | None, title: str, url: str | None) -> str:
-    """Pack the metadata get_text cannot return into the article id.
+    """Pack the metadata the parse endpoint cannot return into the article id.
 
-    A bookmark's save `time` never changes, so freezing it here keeps
-    content_date (and thus the EPUB's dcterms:modified) deterministic without a
-    second fetch. A None time (upstream sent none usable) is carried as null so
-    the download path reports the same "unknown" the list path did. base64url of
-    a compact JSON object, no padding — URL- and cache-key-safe.
+    v2 has no fetch-one-bookmark endpoint, and parse returns the page's title
+    but not the bookmark's URL or save time. A bookmark's save `time` never
+    changes, so freezing it here keeps content_date (and thus the EPUB's
+    dcterms:modified) deterministic without a second fetch. A None time is
+    carried as null so the download path reports the same "unknown" the list
+    path did. base64url of compact JSON, no padding: URL- and cache-key-safe.
     """
     raw = json.dumps(
         {"i": bookmark_id, "t": time, "n": title, "u": url or ""},
@@ -54,177 +83,133 @@ def _encode_article_id(bookmark_id: str, time: int | None, title: str, url: str 
 def _decode_article_id(token: str) -> tuple[str, int | None, str, str]:
     """Inverse of _encode_article_id, returning (bookmark_id, time, title, url).
 
-    A malformed or forged token is not a server failure — it names an article
-    the user cannot have — so it surfaces as ArticleUnavailable(404), not a 500.
-    No signature is needed: get_text is scoped to the authenticated account, so
-    a forged id can only ever build an EPUB from the requester's own library
-    with attacker-chosen metadata on their own download; the url rides only into
-    DC.source, never into a request.
+    A malformed or forged token is not a server failure, it names an article
+    the user cannot have, so it surfaces as ArticleUnavailable(404), not a 500.
+    No signature is needed: parse is scoped to the authenticated account, so a
+    forged id can only build an EPUB from the requester's own library with
+    attacker-chosen metadata on their own download; the url rides only into
+    DC.source, never into a request. The bookmark id does ride into the URL
+    path, so get_article_html checks it is all digits before using it.
     """
     try:
         pad = "=" * (-len(token) % 4)
         data = json.loads(base64.urlsafe_b64decode(token + pad))
         time = None if data["t"] is None else int(data["t"])
         return str(data["i"]), time, str(data["n"]), str(data["u"])
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, OverflowError) as e:
         raise ArticleUnavailable("This article link is invalid.", status=404) from e
-
-
-def _parse_error_envelope(body: str) -> dict | None:
-    """Return the error object if `body` is an Instapaper error envelope, else None.
-
-    Instapaper reports application errors as {"type":"error","error_code":int},
-    either as the sole entry of a list or as a bare object — and, for get_text,
-    sometimes under HTTP 200. So callers must decide by body content, not status.
-    """
-    try:
-        data = json.loads(body)
-    except ValueError:
-        return None
-    if isinstance(data, dict) and data.get("type") == "error":
-        return data
-    if isinstance(data, list):
-        return next((o for o in data if isinstance(o, dict) and o.get("type") == "error"), None)
-    return None
-
-
-def _raise_for_json_error(items: list) -> None:
-    """Map an error entry in a bookmarks/list or folders/list array to UpstreamError."""
-    err = next((o for o in items if isinstance(o, dict) and o.get("type") == "error"), None)
-    if err is None:
-        return
-    code = err.get("error_code")
-    if code == 1040:  # rate-limit exceeded
-        raise UpstreamError("Instapaper is rate-limiting this account; try again in a minute", 429)
-    if code == 1042:  # application suspended
-        raise UpstreamError("Instapaper has suspended this application's API access", 403)
-    raise UpstreamError("Instapaper returned an error", 502)
-
-
-def _raise_for_get_text_error(err: dict) -> None:
-    """Map a get_text error envelope. Always raises."""
-    code = err.get("error_code")
-    if code == 1040:  # rate-limit exceeded
-        raise UpstreamError("Instapaper is rate-limiting this account; try again in a minute", 429)
-    if code == 1042:  # application suspended
-        raise UpstreamError("Instapaper has suspended this application's API access", 403)
-    if code == 1241:  # invalid or missing bookmark_id
-        raise ArticleUnavailable("This article is no longer in your Instapaper account.", status=404)
-    # 1041 premium, 1220/1221 domain restrictions, 1550 text-gen failure, and
-    # anything unmapped: the item exists but cannot be turned into an EPUB.
-    raise ArticleUnavailable(
-        "Instapaper could not produce readable text for this article.", status=422
-    )
-
-class _OAuth1Auth(httpx.Auth):
-    """Signs each request with OAuth 1.0a HMAC-SHA1.
-
-    Attached to the connector's httpx client as `auth=`, so connector methods
-    never build headers themselves and an injected mock client (with no auth)
-    is left unsigned — which is fine, mocks do not verify signatures.
-    """
-
-    # httpx reads the body inside auth_flow to fold it into the signature base
-    # string. For the connector's form-encoded `data=` requests the body is
-    # already available; this flag is defensive against a future switch to a
-    # streaming body, which would otherwise raise httpx.RequestNotRead.
-    requires_request_body = True
-
-    def __init__(self, consumer_key, consumer_secret, oauth_token, oauth_token_secret):
-        self._client = oauthlib.oauth1.Client(
-            consumer_key,
-            client_secret=consumer_secret,
-            resource_owner_key=oauth_token,
-            resource_owner_secret=oauth_token_secret,
-            signature_method=oauthlib.oauth1.SIGNATURE_HMAC_SHA1,
-            signature_type=oauthlib.oauth1.SIGNATURE_TYPE_AUTH_HEADER,
-        )
-
-    def auth_flow(self, request):
-        # Only claim a form body when there is one. folders/list takes no
-        # parameters, and oauthlib rejects a form Content-Type with no body
-        # (ValueError) — which escaped as a 500 on the whole catalog.
-        body = request.content.decode() if request.content else None
-        headers = {"Content-Type": "application/x-www-form-urlencoded"} if body else {}
-        _uri, headers, _body = self._client.sign(
-            str(request.url),
-            http_method=request.method,
-            body=body,
-            headers=headers,
-        )
-        request.headers["Authorization"] = headers["Authorization"]
-        yield request
 
 
 def _parse_time(value) -> int | None:
     """A bookmark's save time as an int epoch, or None if missing or malformed.
 
     Parsed once, here, so the list path and the id-encoded download path derive
-    content_date from the same value. Defaulting to 0 instead would date the
-    download 1970-01-01 while the list said unknown — and an int() that raised
-    would turn one bad bookmark into a 500 for the whole folder.
+    content_date from the same value. An int() that raised would turn one bad
+    bookmark into a 500 for the whole folder.
     """
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
-def _require_success(resp: httpx.Response) -> None:
-    """Reject anything that isn't a 2xx once raise_for_upstream has had its turn.
+def _decode_cursor(cursor: str | None) -> int:
+    """The offset a cursor names; 0 if unusable.
 
-    raise_for_upstream only handles 4xx/5xx, and httpx does not follow
-    redirects, so a 3xx would otherwise be read as a successful answer: for
-    get_text, a sign-in or interstitial page turned into the EPUB.
+    Restart rather than guess, matching base._decode_scan_cursor: a cursor
+    from an older release or a hand-edited one must not skip items silently.
     """
-    if not 200 <= resp.status_code < 300:
-        raise UpstreamError(
-            f"Instapaper returned an unexpected response ({resp.status_code})", 502
-        )
+    if not cursor:
+        return 0
+    try:
+        offset = int(cursor)
+    except ValueError:
+        return 0
+    return offset if offset >= 0 else 0
+
+
+def _next_cursor(offset: int, count: int, total) -> str | None:
+    """The next page's offset as a cursor, or None when this was the last page.
+
+    A short page always ends the feed, whatever `total` claims, so a library
+    that shrinks mid-scan cannot loop. A full page continues unless `total`
+    says it was the last one; an unusable `total` is treated as unknown, and
+    the short-page rule still terminates the feed one request later.
+    """
+    if count < PAGE_SIZE:
+        return None
+    nxt = offset + count
+    try:
+        total = int(total)
+    except (TypeError, ValueError, OverflowError):
+        return str(nxt)
+    if total >= 0 and nxt >= total:
+        return None
+    return str(nxt)
 
 
 def _article_from_bookmark(bm: dict) -> Article:
-    bookmark_id = str(bm["bookmark_id"])
+    bookmark_id = str(bm["id"])
     title = bm.get("title") or "Untitled"
-    url = bm.get("url")
+    url = bm.get("url") or None
     time = _parse_time(bm.get("time"))
+    code = bm.get("category")
     return Article(
         id=_encode_article_id(bookmark_id, time, title, url),
         title=title,
-        url=url,
+        author=bm.get("author") or None,
         summary=bm.get("description") or None,
-        # Instapaper's list payload carries no author, word count, language,
-        # category, or image.
+        url=url,
+        image_url=bm.get("image") or None,
+        category=_CATEGORIES.get(code, "article") if isinstance(code, int) else "article",
+        # The list payload carries no word count or language.
         content_date=parse_epoch(time),
     )
+
+
+def _raise_for_status(resp: httpx.Response) -> None:
+    """Map a v2 error status to UpstreamError; return on a 2xx.
+
+    By status only: the spec says the error message may be reworded and must
+    not be matched on, and some failures (a bad token, for one) arrive with an
+    empty or non-JSON body anyway. 402 and 403 get their own words because a
+    self-hoster can cause them: parse credits, or a token from an account
+    other than the one that registered the application.
+    """
+    status = resp.status_code
+    if 200 <= status < 300:
+        return
+    if status == 401:
+        raise UpstreamError("Instapaper rejected the stored access token", 401)
+    if status == 402:
+        raise UpstreamError("Instapaper's article parser quota is exhausted", 402)
+    if status == 403:
+        raise UpstreamError(
+            "Instapaper refused this application; check that the access token was "
+            "generated by the account that registered it",
+            403,
+        )
+    raise_for_upstream(resp, "Instapaper")  # 429 and every other 4xx/5xx
+    # Only a 3xx reaches here. httpx does not follow redirects, so a sign-in
+    # or interstitial page must not be read as a listing or an article.
+    raise UpstreamError(f"Instapaper returned an unexpected response ({status})", 502)
 
 
 class InstapaperConnector(Connector):
     name = "instapaper"
     description = "Instapaper"
 
-    def __init__(
-        self,
-        consumer_key: str,
-        consumer_secret: str,
-        oauth_token: str,
-        oauth_token_secret: str,
-        client: httpx.AsyncClient | None = None,
-    ):
-        # An injected client is taken as-is (the test seam); it is not signed,
-        # which is fine because a MockTransport does not verify signatures.
-        self._client = client or httpx.AsyncClient(
-            base_url=BASE_URL,
-            timeout=30.0,
-            auth=_OAuth1Auth(consumer_key, consumer_secret, oauth_token, oauth_token_secret),
-        )
+    def __init__(self, access_token: str, client: httpx.AsyncClient | None = None):
+        # An injected client is taken as-is, including its auth and base URL:
+        # the caller that supplies one is a test with a mock transport.
+        self._client = client or build_client(access_token)
 
-    async def _request(self, path: str, data: dict[str, str]) -> httpx.Response:
-        """POST with one retry on 429 (honoring Retry-After) and a readable
-        transport error. Status/body interpretation is the caller's job."""
+    async def _get(self, path: str, params: dict[str, str] | None = None) -> httpx.Response:
+        """GET with one retry on 429 (honoring Retry-After) and a readable
+        transport error. Status and body interpretation is the caller's job."""
         for attempt in (0, 1):
             try:
-                resp = await self._client.post(path, data=data)
+                resp = await self._client.get(path, params=params)
             except httpx.HTTPError as e:
                 raise UpstreamError(f"Could not reach Instapaper: {type(e).__name__}") from e
             if resp.status_code == 429 and attempt == 0:
@@ -233,81 +218,138 @@ class InstapaperConnector(Connector):
             break
         return resp
 
-    async def _post_json(self, path: str, data: dict[str, str]) -> list:
-        """For the JSON array endpoints. Guards the top-level shape: decode_json
-        is typed Any, and a stray object would make the error scan miss the fault
-        and the caller's .get() filter raise AttributeError -> a 500, the exact
-        failure class base.decode_json exists to prevent."""
-        resp = await self._request(path, data)
-        raise_for_upstream(resp, "Instapaper")
-        _require_success(resp)
+    async def _get_object(self, path: str, params: dict[str, str] | None = None) -> dict:
+        """GET a JSON object, or raise UpstreamError. Every v2 read returns an
+        object; a list or scalar means a proxy or a changed API, not data."""
+        resp = await self._get(path, params)
+        _raise_for_status(resp)
         payload = decode_json(resp, "Instapaper")
-        if not isinstance(payload, list):
+        if not isinstance(payload, dict):
             raise UpstreamError("Instapaper returned an unexpected response")
-        _raise_for_json_error(payload)
         return payload
 
-    async def _post_text(self, path: str, data: dict[str, str]) -> str:
-        """For bookmarks/get_text. A success body is HTML; a failure body is a
-        JSON error envelope, possibly under HTTP 200 — so decide by body first."""
-        resp = await self._request(path, data)
-        body = resp.text
-        err = _parse_error_envelope(body)
-        if err is not None:
-            _raise_for_get_text_error(err)  # always raises
-        if resp.status_code == 400:
-            # Observed live (2026-10-10), get_text's 400s carry an envelope:
-            # 1241 for a missing bookmark, 1550 when no text could be
-            # generated, both handled above. This catches a 400 that arrives
-            # without one: on a get_text call, a 400 is about this article,
-            # not the service, so the reader still gets a readable reason.
-            raise ArticleUnavailable(
-                "Instapaper has no readable text for this item; it may have "
-                "been deleted or never processed.",
-                status=422,
-            )
-        raise_for_upstream(resp, "Instapaper")  # 401, 429, other 4xx, 5xx: the service
-        _require_success(resp)
-        if not body.strip():
-            raise ArticleUnavailable(
-                "Instapaper returned no readable text for this article.", status=422
-            )
-        return body
+    async def _page(
+        self, path: str, params: dict[str, str], cursor: str | None
+    ) -> tuple[list[Article], str | None]:
+        """One page of bookmarks under `params`, with the next-offset cursor."""
+        offset = _decode_cursor(cursor)
+        data = await self._get_object(
+            path, {**params, "limit": str(PAGE_SIZE), "offset": str(offset)}
+        )
+        items = data.get("bookmarks")
+        if not isinstance(items, list):
+            raise UpstreamError("Instapaper returned an unexpected response")
+        articles = [
+            _article_from_bookmark(bm) for bm in items if isinstance(bm, dict) and "id" in bm
+        ]
+        # The cursor advances by raw entries, not kept articles: the API's
+        # offset counts everything it sent.
+        return articles, _next_cursor(offset, len(items), data.get("total"))
 
     async def list_folders(self) -> list[Folder]:
-        data = await self._post_json("folders/list", {})
+        data = await self._get_object("folders")
+        entries = data.get("folders")
         custom = [
-            Folder(str(f["folder_id"]), f.get("title") or str(f["folder_id"]))
-            for f in data
-            if isinstance(f, dict) and "folder_id" in f
+            Folder(str(f["id"]), str(f.get("title") or f["id"]))
+            for f in (entries if isinstance(entries, list) else [])
+            if isinstance(f, dict) and "id" in f
         ]
         return [*BUILTIN_FOLDERS, *custom]
 
     async def list_articles(
         self, folder_id: str, cursor: str | None = None
     ) -> tuple[list[Article], str | None]:
-        # No forward pagination: return the recent window, no cursor. `cursor`
-        # is accepted only to satisfy the interface.
-        data = await self._post_json(
-            "bookmarks/list", {"folder_id": folder_id, "limit": _LIST_LIMIT}
-        )
-        articles = [
-            _article_from_bookmark(o)
-            for o in data
-            if isinstance(o, dict) and o.get("type") == "bookmark"
+        # A built-in is a `section`. A user folder is sent as `folder_id` on
+        # its own, which implies section=folder; sending `section` alongside
+        # it would make the API ignore folder_id when the two disagree.
+        # `since` is never sent: it switches the endpoint into a whole-account
+        # change feed.
+        if folder_id in _BUILTIN_IDS:
+            params = {"section": folder_id}
+        else:
+            params = {"folder_id": folder_id}
+        return await self._page("bookmarks", params, cursor)
+
+    async def _tags(self) -> list[dict]:
+        data = await self._get_object("tags")
+        entries = data.get("tags")
+        return [
+            t for t in (entries if isinstance(entries, list) else [])
+            if isinstance(t, dict) and "id" in t
         ]
-        return articles, None
+
+    async def list_views(self) -> list[Folder]:
+        views = []
+        for t in await self._tags():
+            name = str(t.get("name") or t["id"])
+            views.append(Folder(f"{_TAG_VIEW_PREFIX}{t['id']}", name, f"Bookmarks tagged {name}"))
+        return views
+
+    async def list_view_articles(
+        self, view_id: str, cursor: str | None = None
+    ) -> tuple[list[Article], str | None]:
+        if not view_id.startswith(_TAG_VIEW_PREFIX):
+            raise KeyError(view_id)
+        raw = view_id[len(_TAG_VIEW_PREFIX):]
+        # ASCII only: int() rejects some non-ASCII digits that isdigit() accepts.
+        if not (raw.isascii() and raw.isdecimal()):
+            raise KeyError(view_id)
+        tag_id = int(raw)
+        # One lookup per page: the list endpoint takes the tag's name, and the
+        # id is what the view carries. A name cache is the first thing to add
+        # if this shows up in live use.
+        name = next((str(t.get("name") or t["id"]) for t in await self._tags() if t["id"] == tag_id), None)
+        if name is None:
+            # Deleted between the navigation feed and this request. An empty
+            # page, not an error: the catalog will drop it on its next refresh.
+            return [], None
+        # `tag` on its own implies section=tag; never send `section` with it.
+        return await self._page("bookmarks", {"tag": name}, cursor)
 
     async def get_article_html(self, article_id: str) -> tuple[Article, str]:
         bookmark_id, time, title, url = _decode_article_id(article_id)
-        html = await self._post_text("bookmarks/get_text", {"bookmark_id": bookmark_id})
+        if not (bookmark_id.isascii() and bookmark_id.isdecimal()):
+            # It goes into the URL path; anything but digits is a forged id.
+            raise ArticleUnavailable("This article link is invalid.", status=404)
+        resp = await self._get(f"bookmarks/{bookmark_id}/parse")
+        if resp.status_code == 400:
+            # The two documented 400s ("Bookmark not found", "Parsed content
+            # unavailable") are told apart only by message, which must not be
+            # matched. Either way the item cannot become an EPUB.
+            raise ArticleUnavailable(
+                "Instapaper has no readable text for this item; it may have "
+                "been deleted or never processed.",
+                status=422,
+            )
+        _raise_for_status(resp)
+        payload = decode_json(resp, "Instapaper")
+        if not isinstance(payload, dict):
+            raise UpstreamError("Instapaper returned an unexpected response")
+        content = payload.get("content")
+        body = content.get("body") if isinstance(content, dict) else None
+        if not isinstance(body, str) or not body.strip():
+            raise ArticleUnavailable(
+                "Instapaper returned no readable text for this article.", status=422
+            )
+        metadata = payload.get("metadata")
+        author = metadata.get("author") if isinstance(metadata, dict) else None
+        author_name = author.get("name") if isinstance(author, dict) else None
+        # The lead image feeds the EPUB cover, the same as Readwise's image_url
+        # and Wallabag's preview_picture. It is fetched at build time under the
+        # same guards as body images, so it adds no new kind of variance.
+        thumbnail = metadata.get("thumbnail") if isinstance(metadata, dict) else None
+        # Title, URL and date come from the id, not the parser: the bookmark's
+        # title is the one the user sees and may have edited, and the date
+        # must not depend on what the parser returns today.
         article = Article(
             id=article_id,
             title=title,
             url=url or None,
+            author=author_name or None,
+            image_url=thumbnail if isinstance(thumbnail, str) and thumbnail else None,
             content_date=parse_epoch(time),
         )
-        return article, html
+        return article, body
 
     async def close(self) -> None:
         await self._client.aclose()
