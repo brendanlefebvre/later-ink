@@ -135,30 +135,20 @@ that). Configurable via `READWISE_CATEGORIES` (e.g. `article,pdf`).
 
 ### Instapaper
 
-Instapaper's Full API needs an OAuth 1.0a consumer key and secret. Request API
-access from Instapaper (see <https://www.instapaper.com/api>) — each self-hosted
-deployment needs its own; later.ink cannot ship one.
+Instapaper's API v2 needs one personal access token. Register an application
+at <https://www.instapaper.com/developers/applications> while signed in to the
+account you want to read, then use "Generate access token" on the
+application's page. The token is shown once and can be revoked or regenerated
+there. It does not expire. An application reads only its own owner's account
+until Instapaper approves it, which is all a self-hosted instance needs.
 
-Mint the per-account token pair once (your password is never stored):
+Set the one variable:
 
-    python -m later_ink.instapaper_auth
+    INSTAPAPER_ACCESS_TOKEN=...
 
-The helper signs in with your Instapaper username and password, so an
-account without a password (Instapaper allows that) needs one set in
-Instapaper's account settings before it can mint tokens.
-
-Then set all four variables:
-
-    INSTAPAPER_CONSUMER_KEY=...
-    INSTAPAPER_CONSUMER_SECRET=...
-    INSTAPAPER_OAUTH_TOKEN=...          # from the mint step
-    INSTAPAPER_OAUTH_TOKEN_SECRET=...   # from the mint step
-
-Note: Instapaper's API returns only the most recent bookmarks in each folder,
-with no pagination beyond that: up to 500 for Unread, Starred and your own
-folders, but only 200 for Archive. To reach older items, move them into
-additional Instapaper folders, since each folder exposes its own most-recent
-window.
+The catalog lists Home, Liked and Archive, then your folders, then each of
+your tags as its own list. Every list pages through the whole folder, 100
+bookmarks at a time.
 
 ### Reading the same article on two devices
 
@@ -233,17 +223,16 @@ src/later_ink/
   ratelimit.py     # per-IP throttles: unknown-secret probes, signups, feeds
   pages.py         # server-rendered HTML pages
   payments.py      # Stripe verification (optional; inactive unless configured)
-  instapaper_auth.py # one-time Instapaper token mint (xAuth)
   connectors/
     base.py        # Connector interface: folders / views / articles / article HTML
     readwise.py    # Readwise Reader API v3 connector
     wallabag.py    # Wallabag API v2 connector (OAuth2)
-    instapaper.py  # Instapaper Full API connector (OAuth 1.0a)
+    instapaper.py  # Instapaper API v2 connector (bearer token)
 ```
 
 Readwise, [Wallabag](https://wallabag.org/), and
 [Instapaper](https://www.instapaper.com/) are supported today (set the
-`WALLABAG_*` or `INSTAPAPER_*` vars in `.env.example` to enable the latter two).
+`WALLABAG_*` vars or `INSTAPAPER_ACCESS_TOKEN` in `.env.example` to enable the latter two).
 The connector interface is three required methods.
 
 ## Development
