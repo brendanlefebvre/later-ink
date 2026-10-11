@@ -96,7 +96,7 @@ def _decode_article_id(token: str) -> tuple[str, int | None, str, str]:
         data = json.loads(base64.urlsafe_b64decode(token + pad))
         time = None if data["t"] is None else int(data["t"])
         return str(data["i"]), time, str(data["n"]), str(data["u"])
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, OverflowError) as e:
         raise ArticleUnavailable("This article link is invalid.", status=404) from e
 
 

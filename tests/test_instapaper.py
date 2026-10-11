@@ -134,6 +134,17 @@ def test_decode_rejects_wellformed_base64_missing_fields():
     assert exc.value.status == 404
 
 
+@pytest.mark.parametrize("time_value", [float("inf"), 1e999])
+def test_decode_rejects_an_unrepresentable_time(time_value):
+    # json.dumps emits Infinity for both, which json.loads reads back as inf,
+    # and int(inf) raises OverflowError, not ValueError.
+    raw = json.dumps({"i": "42", "t": time_value, "n": "x", "u": ""})
+    bad = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+    with pytest.raises(ArticleUnavailable) as exc:
+        _decode_article_id(bad)
+    assert exc.value.status == 404
+
+
 # ------------------------------------------------------- production client
 
 
@@ -340,6 +351,7 @@ def test_next_cursor_counts_raw_entries_not_kept_articles():
 @pytest.mark.parametrize(
     "response,status",
     [
+        (_error(400), 400),
         (httpx.Response(401, text=""), 401),
         (_error(401), 401),
         (_error(402), 402),
