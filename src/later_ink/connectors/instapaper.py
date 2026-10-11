@@ -264,7 +264,7 @@ class InstapaperConnector(Connector):
 
     async def get_article_html(self, article_id: str) -> tuple[Article, str]:
         bookmark_id, time, title, url = _decode_article_id(article_id)
-        if not bookmark_id.isdigit():
+        if not (bookmark_id.isascii() and bookmark_id.isdecimal()):
             # It goes into the URL path; anything but digits is a forged id.
             raise ArticleUnavailable("This article link is invalid.", status=404)
         resp = await self._get(f"bookmarks/{bookmark_id}/parse")

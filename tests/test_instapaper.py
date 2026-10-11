@@ -500,6 +500,19 @@ def test_forged_non_numeric_bookmark_id_is_rejected_before_any_request():
     assert calls == []
 
 
+def test_forged_non_ascii_digit_bookmark_id_is_rejected_before_any_request():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json=PARSED)
+
+    with pytest.raises(ArticleUnavailable) as exc:
+        _download(handler, _encode_article_id("4²", TIME, "T", None))
+    assert exc.value.status == 404
+    assert calls == []
+
+
 def test_list_then_download_agree_on_content_date():
     articles, _ = _list(lambda request: _page([BOOKMARK], 1))
     article, _ = _download(lambda request: httpx.Response(200, json=PARSED), articles[0].id)
