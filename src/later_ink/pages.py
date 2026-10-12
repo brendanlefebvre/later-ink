@@ -418,8 +418,8 @@ def landing(payment_link: str | None, free_signup: bool, base_url: str) -> str:
     # absolute URLs or unfurlers silently skip them; the description is a
     # static string so a card never depends on runtime state.
     og_description = (
-        "Turn your Readwise Reader or Wallabag queue into an OPDS catalog "
-        "any e-reader can browse. Free, open source, self-hostable."
+        "Turn your Readwise Reader, Wallabag, or Instapaper queue into an OPDS "
+        "catalog any e-reader can browse. Free, open source, self-hostable."
     )
     og_tags = (
         '<meta property="og:title" content="Later.Ink: your read-later queue, on e-ink">'
@@ -439,8 +439,8 @@ def landing(payment_link: str | None, free_signup: bool, base_url: str) -> str:
         f"""
 <section class="hero">
   <h1>Your read-later queue,<br>on e-ink<span class="end">.</span></h1>
-  <p class="lede">Later.Ink turns your <strong>Readwise Reader</strong> or <strong>Wallabag</strong>
-    queue into a catalog your reading app already speaks (OPDS). Open it in KOReader
+  <p class="lede">Later.Ink turns your <strong>Readwise Reader</strong>, <strong>Wallabag</strong>,
+    or <strong>Instapaper</strong> queue into a catalog your reading app already speaks (OPDS). Open it in KOReader
     on a Kobo or Boox, or in a reader app like Fablum on your <strong>iPhone or iPad</strong>.
     Every item is fetched as a clean EPUB, images and all, that reads fully offline.</p>
   {note}
@@ -469,8 +469,8 @@ def landing(payment_link: str | None, free_signup: bool, base_url: str) -> str:
   (For a podcast, load its transcript in Readwise Reader first.)</p>
 
 <h2 class="eyebrow" id="self-host">Self-host it</h2>
-<p class="small">Free and open source (MIT). Bring your own Readwise or Wallabag
-  credentials; Later.Ink stores nothing. Run the prebuilt Docker image,
+<p class="small">Free and open source (MIT). Bring your own Readwise, Wallabag, or
+  Instapaper credentials; Later.Ink stores nothing. Run the prebuilt Docker image,
   <code>pip install later-ink</code>, or build from source; every path is one or
   two commands, then you add the catalog URL to your reader. The
   <a class="inline" href="{REPO_URL}#self-host-quickstart">README quickstart</a>

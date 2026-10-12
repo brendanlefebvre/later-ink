@@ -75,7 +75,7 @@ def draw_arrow(x, cy):
 
 # Pipeline: text segments with drawn arrows between them.
 pipe_font = font(30, 450)
-segs = ["Readwise Reader / Wallabag", "OPDS", "any e-reader"]
+segs = ["Readwise / Wallabag / Instapaper", "OPDS", "any e-reader"]
 GAP = 22
 widths = [d.textlength(s, font=pipe_font) for s in segs]
 total = sum(widths) + (len(segs) - 1) * (GAP * 2 + 30)
