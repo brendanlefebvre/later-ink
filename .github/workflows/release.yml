@@ -83,3 +83,28 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           skip-existing: true
+
+  release:
+    # The GitHub Release is the announcement, so it comes last: a tag whose
+    # image or package failed to publish gets no Release entry pointing at it.
+    needs: [ghcr, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Title follows the hand-made releases ("0.5.1 — the image is ..."),
+      # derived from the annotated tag's subject. Past tags were written as
+      # "Release X.Y.Z: summary" and "later-ink X.Y.Z: summary"; either
+      # becomes "X.Y.Z — summary", and any other shape is kept verbatim. The
+      # body is GitHub's generated notes: merged PR titles since the previous
+      # tag.
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          title=$(git tag -l --format='%(contents:subject)' "$TAG" \
+            | sed -E 's/^(Release |later-ink )?([0-9][0-9.]*): /\2 — /')
+          gh release create "$TAG" --verify-tag --generate-notes --title "${title:-$TAG}"
