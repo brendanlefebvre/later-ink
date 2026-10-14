@@ -171,6 +171,18 @@ def raise_for_upstream(resp: httpx.Response, service: str) -> None:
         raise UpstreamError(f"{service} rejected the stored credentials", 401)
     if resp.status_code >= 400:
         raise UpstreamError(f"{service} returned an error ({resp.status_code})", resp.status_code)
+    if 300 <= resp.status_code < 400:
+        # The clients never follow redirects, and an API endpoint has no
+        # business issuing one: it is a sign-in page, an interstitial, or a
+        # paywall (wallabag.it answers every call on a lapsed subscription
+        # with a 302 to /subscription/). Left alone, the HTML body fails JSON
+        # decoding and reaches the reader as "unexpected response", with the
+        # one diagnostic fact, the Location, dropped on the floor. Status 502
+        # rather than the 3xx: the upstream did not fail in a way its status
+        # names, and the reader must not be sent to follow the redirect.
+        location = resp.headers.get("location")
+        where = f" to {location}" if location else ""
+        raise UpstreamError(f"{service} redirected{where} ({resp.status_code})", 502)
 
 
 def decode_json(resp: httpx.Response, service: str) -> Any:
