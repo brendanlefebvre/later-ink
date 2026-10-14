@@ -1,7 +1,17 @@
 import asyncio
 from datetime import datetime
 
-from later_ink.connectors.base import Article, Connector, Folder, parse_epoch
+import httpx
+import pytest
+
+from later_ink.connectors.base import (
+    Article,
+    Connector,
+    Folder,
+    UpstreamError,
+    parse_epoch,
+    raise_for_upstream,
+)
 
 
 def test_parse_epoch_returns_naive_utc():
@@ -44,3 +54,23 @@ def test_connector_close_default_is_a_noop_awaitable():
         await conn.close()  # idempotent
 
     asyncio.run(go())
+
+
+def test_a_redirect_is_an_upstream_error_naming_its_target():
+    # wallabag.it on a lapsed subscription: a 302 to /subscription/ on every
+    # API call, with an HTML body. The Location is the whole diagnosis.
+    resp = httpx.Response(302, headers={"Location": "/subscription/"}, text="<html>")
+    with pytest.raises(UpstreamError) as exc:
+        raise_for_upstream(resp, "Wallabag")
+    assert str(exc.value) == "Wallabag redirected to /subscription/ (302)"
+    assert exc.value.status == 502
+
+
+def test_a_redirect_without_a_location_still_reads_as_a_redirect():
+    with pytest.raises(UpstreamError) as exc:
+        raise_for_upstream(httpx.Response(301), "Readwise")
+    assert str(exc.value) == "Readwise redirected (301)"
+
+
+def test_a_success_passes_raise_for_upstream():
+    raise_for_upstream(httpx.Response(200, json={}), "Wallabag")

@@ -363,3 +363,24 @@ def test_transient_failure_on_refresh_is_raised_not_retried_as_password_login():
     err = asyncio.run(go())
     assert err.status == 429 and "rate-limiting" in str(err)
     assert grants == ["password", "refresh_token"]  # no second password login
+
+
+def test_lapsed_subscription_redirect_is_reported_with_its_target():
+    # wallabag.it answers every API call on a lapsed subscription with a 302
+    # to /subscription/ and an HTML body; the token endpoint keeps working.
+    # The reader sees a 502 whose text names the redirect, not "unexpected
+    # response" from failing to parse the HTML as JSON.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth/v2/token":
+            return httpx.Response(200, json={"access_token": "AT", "expires_in": 3600})
+        return httpx.Response(
+            302,
+            headers={"Location": "/subscription/", "Content-Type": "application/json"},
+            text="<!DOCTYPE html><html><body>Redirecting to /subscription/</body></html>",
+        )
+
+    conn = _make_conn(handler)
+    with pytest.raises(UpstreamError) as exc:
+        _run(conn, lambda: conn.list_articles("unread"))
+    assert "redirected to /subscription/" in str(exc.value)
+    assert "unexpected" not in str(exc.value)
