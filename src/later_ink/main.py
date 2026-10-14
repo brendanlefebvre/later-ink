@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -171,6 +172,34 @@ def _is_https(request: Request) -> bool:
         if proto:
             return proto.split(",")[0].strip() == "https"
     return request.url.scheme == "https"
+
+
+# What a Host header may contain: a hostname or bracketed IPv6 literal plus an
+# optional port. Anything else is not a host a client will reach the server
+# on, so it never becomes the origin baked into feed links.
+_HOST_RE = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9.\-_]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$")
+
+
+def _feed_origin(request: Request) -> str:
+    """scheme://host[:port] that the feed's absolute links are built on.
+
+    Taken from the request, not BASE_URL: a self-hoster reaches the same
+    instance as `nas:8011` on the LAN and as a public name through a proxy,
+    and the links only work if they name whichever one the client just used.
+    BASE_URL defaults to localhost besides, which no e-reader can follow.
+    Behind a trusted proxy the forwarded host and scheme win, as the
+    proxy's own values are what the client sees. A malformed Host header
+    falls back to BASE_URL rather than being echoed into the catalog.
+    """
+    host = ""
+    if config.trust_proxy_headers():
+        host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+    if not host:
+        host = request.headers.get("host", "").strip()
+    if not host or not _HOST_RE.match(host):
+        return config.get_base_url()
+    scheme = "https" if _is_https(request) else "http"
+    return f"{scheme}://{host}"
 
 
 _RETRY_AFTER_FEED = "60"
@@ -569,7 +598,7 @@ async def _catalog_entries(c: Connector) -> list[Folder]:
     return [*await c.list_folders(), *await c.list_views()]
 
 
-async def _connector_folder_feed(name: str, c: Connector) -> Response:
+async def _connector_folder_feed(name: str, c: Connector, request: Request) -> Response:
     return Response(
         content=opds.folder_catalog(
             f"urn:later-ink:{name}",
@@ -578,45 +607,56 @@ async def _connector_folder_feed(name: str, c: Connector) -> Response:
             base=f"/opds/{name}",
             start_href="/opds/",
             search_href=f"/opds/{name}/search.xml",
+            origin=_feed_origin(request),
         ),
         media_type=NAV_MEDIA,
     )
 
 
 @app.api_route("/opds/", methods=["GET", "HEAD"])
-async def opds_root():
+async def opds_root(request: Request):
     # With a single connector (the usual self-host case), skip the redundant
     # connector-selection level and present its folders directly — matching the
     # already-flat multi-tenant layout. Only offer a chooser when there's a
     # genuine choice between connectors.
     if len(_connectors) == 1:
         name, c = next(iter(_connectors.items()))
-        return await _connector_folder_feed(name, c)
+        return await _connector_folder_feed(name, c, request)
     entries = [(name, c.description) for name, c in _connectors.items()]
-    return Response(content=opds.root_catalog(entries), media_type=NAV_MEDIA)
+    return Response(
+        content=opds.root_catalog(entries, origin=_feed_origin(request)),
+        media_type=NAV_MEDIA,
+    )
 
 
 @app.api_route("/opds/{connector}/", methods=["GET", "HEAD"])
-async def opds_connector(connector: str):
+async def opds_connector(connector: str, request: Request):
     c = _connectors.get(connector)
     if not c:
         raise HTTPException(404, f"Connector '{connector}' not found")
-    return await _connector_folder_feed(connector, c)
+    return await _connector_folder_feed(connector, c, request)
 
 
 @app.api_route("/opds/{connector}/search.xml", methods=["GET", "HEAD"])
-async def opds_search_description(connector: str):
+async def opds_search_description(connector: str, request: Request):
     c = _connectors.get(connector)
     if not c:
         raise HTTPException(404, f"Connector '{connector}' not found")
     return Response(
-        content=opds.search_description(f"/opds/{connector}/search?q={{searchTerms}}"),
+        content=opds.search_description(
+            f"/opds/{connector}/search?q={{searchTerms}}", origin=_feed_origin(request)
+        ),
         media_type=OPENSEARCH_MEDIA,
     )
 
 
 @app.api_route("/opds/{connector}/search", methods=["GET", "HEAD"])
-async def opds_search(connector: str, q: str = Query(""), cursor: str | None = Query(None)):
+async def opds_search(
+    connector: str,
+    request: Request,
+    q: str = Query(""),
+    cursor: str | None = Query(None),
+):
     c = _connectors.get(connector)
     if not c:
         raise HTTPException(404, f"Connector '{connector}' not found")
@@ -628,6 +668,7 @@ async def opds_search(connector: str, q: str = Query(""), cursor: str | None = Q
         self_href=f"/opds/{connector}/search?q={quote(q)}",
         epub_base=f"/opds/{connector}/articles",
         start_href="/opds/",
+        origin=_feed_origin(request),
     )
 
 
@@ -644,7 +685,12 @@ async def opds_epub(connector: str, article_id: str, request: Request):
 
 
 @app.api_route("/opds/{connector}/{folder_id}/", methods=["GET", "HEAD"])
-async def opds_folder(connector: str, folder_id: str, cursor: str | None = Query(None)):
+async def opds_folder(
+    connector: str,
+    folder_id: str,
+    request: Request,
+    cursor: str | None = Query(None),
+):
     c = _connectors.get(connector)
     if not c:
         raise HTTPException(404, f"Connector '{connector}' not found")
@@ -656,6 +702,7 @@ async def opds_folder(connector: str, folder_id: str, cursor: str | None = Query
         self_href=f"/opds/{connector}/{folder_id}/",
         epub_base=f"/opds/{connector}/articles",
         start_href="/opds/",
+        origin=_feed_origin(request),
     )
 
 
@@ -696,6 +743,7 @@ async def tenant_root(secret: str, request: Request):
             base=f"/{secret}",
             start_href=f"/{secret}/",
             search_href=f"/{secret}/search.xml",
+            origin=_feed_origin(request),
         ),
         media_type=NAV_MEDIA,
     )
@@ -714,7 +762,9 @@ async def tenant_epub(secret: str, article_id: str, request: Request):
 async def tenant_search_description(secret: str, request: Request):
     _resolve_secret(secret, request)
     return Response(
-        content=opds.search_description(f"/{secret}/search?q={{searchTerms}}"),
+        content=opds.search_description(
+            f"/{secret}/search?q={{searchTerms}}", origin=_feed_origin(request)
+        ),
         media_type=OPENSEARCH_MEDIA,
     )
 
@@ -736,6 +786,7 @@ async def tenant_search(
         self_href=f"/{secret}/search?q={quote(q)}",
         epub_base=f"/{secret}/articles",
         start_href=f"/{secret}/",
+        origin=_feed_origin(request),
     )
 
 
@@ -756,6 +807,7 @@ async def tenant_folder(
         self_href=f"/{secret}/{folder_id}/",
         epub_base=f"/{secret}/articles",
         start_href=f"/{secret}/",
+        origin=_feed_origin(request),
     )
 
 
@@ -770,6 +822,7 @@ async def _folder_response(
     self_href: str,
     epub_base: str,
     start_href: str,
+    origin: str,
 ) -> Response:
     # Views share the folder URL space, so a folder id wins if both define one.
     folder = next((f for f in await c.list_folders() if f.id == folder_id), None)
@@ -791,6 +844,7 @@ async def _folder_response(
             epub_base=epub_base,
             start_href=start_href,
             next_cursor=next_cursor,
+            origin=origin,
         ),
         media_type=ACQ_MEDIA,
     )
@@ -804,6 +858,7 @@ async def _search_response(
     self_href: str,
     epub_base: str,
     start_href: str,
+    origin: str,
 ) -> Response:
     articles, next_cursor = await c.search(query, cursor)
     return Response(
@@ -815,6 +870,7 @@ async def _search_response(
             epub_base=epub_base,
             start_href=start_href,
             next_cursor=next_cursor,
+            origin=origin,
         ),
         media_type=ACQ_MEDIA,
     )
