@@ -531,3 +531,102 @@ def test_degraded_render_is_not_cached(cache_client, monkeypatch):
         assert list(cache_dir.iterdir()) == []
     finally:
         main._connectors.clear()
+
+
+# ------------------------------------------------- absolute feed links
+#
+# Moon+ Reader cannot resolve a root-relative href against the catalog URL:
+# `/opds/readwise/` comes out as `http://opds/readwise/` and nothing below the
+# top level opens. So every link the feeds hand out names the origin the
+# client actually used to reach the server.
+
+ROOT_RELATIVE_HREF = re.compile(r'href="/')
+
+
+def test_self_host_links_use_the_requesting_host(client):
+    main._connectors["readwise"] = ReadwiseConnector("good-token")
+    try:
+        root = client.get("/opds/", headers={"host": "woburnstreetnas:8011"})
+        assert root.status_code == 200
+        assert 'href="http://woburnstreetnas:8011/opds/readwise/later/"' in root.text
+        assert 'href="http://woburnstreetnas:8011/opds/"' in root.text  # self + start
+        assert 'href="http://woburnstreetnas:8011/opds/readwise/search.xml"' in root.text
+        assert not ROOT_RELATIVE_HREF.search(root.text)
+
+        folder = client.get("/opds/readwise/later/", headers={"host": "woburnstreetnas:8011"})
+        assert 'href="http://woburnstreetnas:8011/opds/readwise/articles/42.epub"' in folder.text
+        assert not ROOT_RELATIVE_HREF.search(folder.text)
+
+        desc = client.get("/opds/readwise/search.xml", headers={"host": "woburnstreetnas:8011"})
+        assert (
+            'template="http://woburnstreetnas:8011/opds/readwise/search?q={searchTerms}"'
+            in desc.text
+        )
+    finally:
+        main._connectors.clear()
+
+
+def test_connector_chooser_links_are_absolute(client):
+    main._connectors["readwise"] = ReadwiseConnector("good-token")
+    main._connectors["other"] = ReadwiseConnector("good-token")
+    try:
+        root = client.get("/opds/", headers={"host": "nas:8011"})
+        assert 'href="http://nas:8011/opds/readwise/"' in root.text
+        assert not ROOT_RELATIVE_HREF.search(root.text)
+    finally:
+        main._connectors.clear()
+
+
+def test_tenant_links_are_absolute_including_pagination(client, monkeypatch):
+    async def fake_view_articles(self, view_id, cursor=None):
+        if cursor is None:
+            return [Article(id="1", title="First")], "1|abc"
+        return [Article(id="2", title="Second")], None
+
+    monkeypatch.setattr(ReadwiseConnector, "list_view_articles", fake_view_articles)
+    secret, _ = _signup(client)
+    headers = {"host": "later.example"}
+
+    root = client.get(f"/{secret}/", headers=headers)
+    assert f'href="http://later.example/{secret}/later/"' in root.text
+    assert not ROOT_RELATIVE_HREF.search(root.text)
+
+    feed = client.get(f"/{secret}/short-reads/", headers=headers)
+    assert f'href="http://later.example/{secret}/articles/1.epub"' in feed.text
+    assert f'href="http://later.example/{secret}/short-reads/?cursor=1%7Cabc"' in feed.text
+    assert not ROOT_RELATIVE_HREF.search(feed.text)
+
+    hits = client.get(f"/{secret}/search", params={"q": "test"}, headers=headers)
+    assert f'href="http://later.example/{secret}/articles/42.epub"' in hits.text
+    assert not ROOT_RELATIVE_HREF.search(hits.text)
+
+    desc = client.get(f"/{secret}/search.xml", headers=headers)
+    assert f'template="http://later.example/{secret}/search?q={{searchTerms}}"' in desc.text
+
+
+def test_forwarded_headers_shape_links_only_behind_a_trusted_proxy(client, monkeypatch):
+    secret, _ = _signup(client)
+    proxied = {
+        "host": "10.0.0.5:8000",
+        "x-forwarded-host": "later.example",
+        "x-forwarded-proto": "https",
+    }
+
+    # Untrusted by default: the proxy headers are ignored, the direct host is used.
+    resp = client.get(f"/{secret}/", headers=proxied)
+    assert f'href="http://10.0.0.5:8000/{secret}/"' in resp.text
+    assert "later.example" not in resp.text
+
+    monkeypatch.setenv("TRUST_PROXY_HEADERS", "1")
+    resp = client.get(f"/{secret}/", headers=proxied)
+    assert f'href="https://later.example/{secret}/"' in resp.text
+    assert "10.0.0.5" not in resp.text
+
+
+def test_malformed_host_header_is_not_echoed_into_links(client, monkeypatch):
+    monkeypatch.setenv("BASE_URL", "https://later.ink")
+    secret, _ = _signup(client)
+    resp = client.get(f"/{secret}/", headers={"host": "evil.example/#@"})
+    assert resp.status_code == 200
+    assert "evil.example" not in resp.text
+    assert f'href="https://later.ink/{secret}/"' in resp.text
